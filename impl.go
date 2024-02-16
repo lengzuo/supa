@@ -19,10 +19,9 @@ const (
 	authApiPath         = "/auth/v1"
 	restApiPath         = "/rest/v1"
 	authPrefix          = "Bearer"
-	//storageApiPath      = "/storage/v1"
 )
 
-type impl struct {
+type Client struct {
 	// Auth refer from https://github.com/supabase/gotrue-js/blob/master/src/GoTrueClient.ts and https://github.com/supabase/gotrue-js/blob/master/src/GoTrueAdminApi.ts
 	Auth authAPI
 	// DB refer from https://github.com/nedpals/supabase-go/tree/master
@@ -30,7 +29,7 @@ type impl struct {
 	//storage storageAPI
 }
 
-func New(cfg config.Supabase) (*impl, error) {
+func New(cfg config.Supabase) (*Client, error) {
 	if len(strings.TrimSpace(cfg.ApiKey)) == 0 {
 		return nil, common.ErrEmptyApiKey
 	}
@@ -51,7 +50,7 @@ func New(cfg config.Supabase) (*impl, error) {
 		postgres.WithToken(cfg.ApiKey),
 		postgres.With(authorizationHeader, cfg.ApiKey),
 	)
-	return &impl{
+	return &Client{
 		Auth: newAuth(authClient),
 		DB:   supaDB,
 		//storage: newStorage(authClient, cfg.Bucket),

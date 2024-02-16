@@ -50,3 +50,22 @@ type SignUpRequest struct {
 	Phone              string      `json:"phone,omitempty"`
 	Channel            string      `json:"channel,omitempty"`
 }
+
+type RefreshTokenReq struct {
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
+type OAuthSignInRequest struct {
+	RedirectTo       string `url:"redirect_to,omitempty"`
+	Scopes           string `url:"scopes,omitempty"`
+	Provider         string `url:"provider,omitempty"`
+	SkipHTTPRedirect string `url:"skip_http_redirect,omitempty"`
+}
+
+type SignInWithIDTokenRequest struct {
+	AccessToken        string     `json:"access_token"`
+	GotrueMetaSecurity GotrueMeta `json:"gotrue_meta_security,omitempty"`
+	IDToken            string     `json:"id_token"`
+	Nonce              string     `json:"nonce"`
+	Provider           string     `json:"provider,omitempty"`
+}

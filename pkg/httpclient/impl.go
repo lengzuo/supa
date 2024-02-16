@@ -93,7 +93,7 @@ func (c client) Call(ctx context.Context, fullUrl, method string, body []byte, c
 		return nil, err
 	}
 	respBody := *bytes.NewBuffer(jsonBytes)
-	logger.Logger.Debug("<------- : response: [%d] %s", httpResp.StatusCode, respBody.Bytes())
+	logger.Logger.Debug("<------- %s: %d: %s", fullUrl, httpResp.StatusCode, respBody.Bytes())
 	return &Resp{
 		Body:       respBody,
 		Header:     httpResp.Header,
