@@ -79,7 +79,7 @@ token := "eyxxxxxxxx.xxxx...."
 user, err := supaClient.Auth.User(ctx, token)
 ```
 
-### Select table
+### Select more than 1 rows 
 ```go
 ctx := context.Background()
 var u []dto.YourTable
@@ -87,6 +87,47 @@ query := supaClient.DB.From("your_table").Select("*").Eq("id", "1acaxxxf-xx0d-4x
 err := query.ExecuteWithContext(ctx, &u)
 bytes, err := json.Marshal(u)
 log.Debug("query your table result: %s", bytes)
+```
+
+### Select single row 
+```go
+ctx := context.Background()
+var u dto.YourTable
+query := supaClient.DB.From("your_table").Select("*").Eq("id", "1acaxxxf-xx0d-4xxb-xx48-xxxxx").Single()
+err := query.ExecuteWithContext(ctx, &u)
+bytes, err := json.Marshal(u)
+log.Debug("query your table result: %s", bytes)
+```
+
+### Insert with return result 
+```go
+ctx := context.Background()
+u := T{
+    Name: "test33",
+}
+query := supaClient.DB.From("test").Insert(u)
+r := new(T)
+err := query.ExecuteWithContext(ctx, &r)
+bytes, err := json.Marshal(u)
+log.Debug("query your table result: %s", bytes)
+```
+
+### Insert without returning result 
+```go
+ctx := context.Background()
+u := T{
+    Name: "test33",
+}
+query := supaClient.DB.From("test").Insert(u)
+err := query.ExecuteWithContext(ctx, nil)
+```
+
+### Delete row [No result return]
+```go
+ctx := context.Background()
+query := supaClient.DB.From("test").Delete().Eq("id", "X")
+err := query.ExecuteWithContext(ctx, nil)
+log.Debug("delete successful, no result")
 ```
 
 ### RPC
