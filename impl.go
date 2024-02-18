@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lengzuo/supa/config"
 	"github.com/lengzuo/supa/pkg/httpclient"
 	"github.com/lengzuo/supa/pkg/logger"
 	"github.com/lengzuo/supa/postgres"
@@ -29,7 +28,7 @@ type Client struct {
 	//storage storageAPI
 }
 
-func New(cfg config.Supabase) (*Client, error) {
+func New(cfg Config) (*Client, error) {
 	if len(strings.TrimSpace(cfg.ApiKey)) == 0 {
 		return nil, common.ErrEmptyApiKey
 	}
