@@ -38,7 +38,10 @@ func (b *RequestBuilder) Select(columns ...string) *SelectRequestBuilder {
 
 // Insert starts building an INSERT request with the provided JSON data.
 func (b *RequestBuilder) Insert(json interface{}) *QueryRequestBuilder {
+	// Return result after insert
 	b.header.Set("Prefer", "return=representation")
+	// Return single instead of array after insert
+	b.header.Set("Accept", "application/vnd.pgrst.object+json")
 	return &QueryRequestBuilder{
 		client:     b.client,
 		path:       b.path,
@@ -105,10 +108,6 @@ type QueryRequestBuilder struct {
 
 // ExecuteWithContext sends the query request with the provided context and unmarshal the response JSON into the provided object.
 func (b *QueryRequestBuilder) ExecuteWithContext(ctx context.Context, result interface{}) error {
-	data, err := json.Marshal(b.json)
-	if err != nil {
-		return err
-	}
 	query, err := url.QueryUnescape(b.params.Encode())
 	if err != nil {
 		return err
@@ -116,11 +115,20 @@ func (b *QueryRequestBuilder) ExecuteWithContext(ctx context.Context, result int
 	fullUrl := b.client.baseURL
 	fullUrl.Path += b.path
 	fullUrl.RawQuery = query
-	httpResp, err := b.client.httpClient.Call(ctx, fullUrl.String(), b.httpMethod, data, func(req *http.Request) {
+	httpResp, err := b.client.httpClient.Call(ctx, fullUrl.String(), b.httpMethod, b.json, func(req *http.Request) {
 		for k, values := range b.client.defaultHeaders {
 			for i := range values {
 				req.Header.Set(k, values[i])
 			}
+		}
+		for k, values := range b.header {
+			for i := range values {
+				req.Header.Set(k, values[i])
+			}
+		}
+		if result == nil {
+			req.Header.Set("Accept", "")
+			req.Header.Set("Prefer", "")
 		}
 	})
 	if err != nil {
@@ -169,6 +177,13 @@ func (b *FilterRequestBuilder) Filter(column, operator, criteria string) *Filter
 // Eq adds an equality filter condition to the request.
 func (b *FilterRequestBuilder) Eq(column, value string) *FilterRequestBuilder {
 	return b.Filter(column, "eq", value)
+}
+
+// Single Retrieves only one row from the result. The total result set must be one row
+// (e.g., by using Limit). Otherwise, this will result in an error.
+func (b *FilterRequestBuilder) Single() *FilterRequestBuilder {
+	b.header.Set("Accept", "application/vnd.pgrst.object+json")
+	return b
 }
 
 // Gt adds a greater-than filter condition to the request.

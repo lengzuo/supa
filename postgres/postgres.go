@@ -54,15 +54,11 @@ func New(baseURL string, opts ...Option) *Client {
 	if err != nil {
 		panic(fmt.Sprintf("invalid url provided in postgres new"))
 	}
-
 	c := Client{
-		defaultHeaders: http.Header{},
 		httpClient:     httpclient.New(connectionTimeout),
 		baseURL:        base,
+		defaultHeaders: make(http.Header),
 	}
-	c.defaultHeaders.Set(enum.Accept.String(), applicationJson)
-	c.defaultHeaders.Set(enum.ContentType.String(), applicationJson)
-
 	for _, opt := range opts {
 		opt(&c)
 	}
