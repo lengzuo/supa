@@ -20,7 +20,7 @@ const (
 )
 
 type Sender interface {
-	Call(ctx context.Context, fullUrl, method string, body []byte, customHeaders HeaderSetter) (*Resp, error)
+	Call(ctx context.Context, fullUrl, method string, body any, customHeaders HeaderSetter) (*Resp, error)
 }
 
 type HeaderSetter func(req *http.Request)
@@ -69,8 +69,21 @@ func printHeader(header http.Header) []byte {
 	return nil
 }
 
-func (c client) Call(ctx context.Context, fullUrl, method string, body []byte, customHeaders HeaderSetter) (*Resp, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, method, fullUrl, bytes.NewBuffer(body))
+func (c client) Call(ctx context.Context, fullUrl, method string, body any, customHeaders HeaderSetter) (*Resp, error) {
+	qs, err := Values(body)
+	if err != nil {
+		logger.Logger.Error("failed in retrieving query string with err: %s", err)
+		return nil, err
+	}
+	if len(qs) > 0 {
+		fullUrl += "?" + qs.Encode()
+	}
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		logger.Logger.Error("failed in marshal request with err: %s", err)
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, fullUrl, bytes.NewBuffer(reqBody))
 	if err != nil {
 		logger.Logger.Error("failed in new request with context with err: %s", err)
 		return nil, err
@@ -80,7 +93,7 @@ func (c client) Call(ctx context.Context, fullUrl, method string, body []byte, c
 	customHeaders(httpReq)
 
 	var httpResp *http.Response
-	logger.Logger.Debug("-------> %s %s: header:%s body:%s", method, fullUrl, printHeader(httpReq.Header), printBody(body))
+	logger.Logger.Debug("-------> %s %s: header:%s body:%s", method, fullUrl, printHeader(httpReq.Header), printBody(reqBody))
 	httpResp, err = c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err

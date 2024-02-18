@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/google/go-querystring/query"
 	"github.com/lengzuo/supa/dto"
 	"github.com/lengzuo/supa/pkg/catch"
 	"github.com/lengzuo/supa/pkg/httpclient"
@@ -16,14 +15,16 @@ import (
 )
 
 type authAPI interface {
+	ResetPasswordForEmail(ctx context.Context, body dto.ResetPasswordForEmailRequest) error
 	RefreshToken(ctx context.Context, refreshToken string) (*dto.AuthDetailResp, error)
 	SignInWithIDToken(ctx context.Context, body dto.SignInWithIDTokenRequest) (*dto.AuthDetailResp, error)
 	SignInWithOAuth(ctx context.Context, body dto.OAuthSignInRequest) (string, error)
-	SignInWithOTP(ctx context.Context, body dto.SignInRequest, redirectURL string) error
+	SignInWithOTP(ctx context.Context, body dto.SignInRequest) error
 	SignInWithPassword(ctx context.Context, body dto.SignInRequest) (*dto.AuthDetailResp, error)
 	SignOut(ctx context.Context, token string) error
 	SignUp(ctx context.Context, credentials dto.SignUpRequest) (*dto.AuthDetailResp, error)
 	User(ctx context.Context, token string) (*dto.User, error)
+	UpdateUser(ctx context.Context, token string, body dto.UpdateUserRequest) (*dto.User, error)
 	Verify(ctx context.Context, body dto.VerifyRequest) (*dto.AuthDetailResp, error)
 }
 
@@ -35,18 +36,27 @@ func newAuth(c client) *auth {
 	return &auth{c}
 }
 
-// SignInWithOTP log in a user using magiclink or a one-time password (OTP).
-func (i auth) SignInWithOTP(ctx context.Context, body dto.SignInRequest, redirectURL string) error {
-	reqBody, err := json.Marshal(body)
+// ResetPasswordForEmail sends a password reset request to an email address. This method supports the PKCE flow.
+func (i auth) ResetPasswordForEmail(ctx context.Context, body dto.ResetPasswordForEmailRequest) error {
+	reqURL := fmt.Sprintf("%s/recover", i.authHost)
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, body, func(req *http.Request) {
+		req.Header.Set(authorizationHeader, i.apiKey)
+	})
 	if err != nil {
-		logger.Logger.Error("failed in marshal sign in with otp request with err: %s", err)
+		logger.Logger.Error("failed in reset password for email httpclient call with err: %s", err)
 		return err
 	}
-	reqURL := fmt.Sprintf("%s/otp", i.authHost)
-	if redirectURL != "" {
-		reqURL += "?redirect_to=" + url.QueryEscape(redirectURL)
+	if !httpclient.IsHTTPSuccess(httpResp.StatusCode) {
+		logger.Logger.Warn("getting %d in reset password for email due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		return catch.External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
-	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, reqBody, func(req *http.Request) {
+	return nil
+}
+
+// SignInWithOTP log in a user using magiclink or a one-time password (OTP).
+func (i auth) SignInWithOTP(ctx context.Context, body dto.SignInRequest) error {
+	reqURL := fmt.Sprintf("%s/otp", i.authHost)
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, body, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
 	})
 	if err != nil {
@@ -62,13 +72,8 @@ func (i auth) SignInWithOTP(ctx context.Context, body dto.SignInRequest, redirec
 
 // SignInWithPassword log in an existing user with an email and password or phone and password.
 func (i auth) SignInWithPassword(ctx context.Context, body dto.SignInRequest) (*dto.AuthDetailResp, error) {
-	reqBody, err := json.Marshal(body)
-	if err != nil {
-		logger.Logger.Error("failed in marshal sign in with password request with err: %s", err)
-		return nil, err
-	}
 	reqURL := fmt.Sprintf("%s/token?grant_type=password", i.authHost)
-	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, reqBody, func(req *http.Request) {
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, body, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
 	})
 	if err != nil {
@@ -90,13 +95,8 @@ func (i auth) SignInWithPassword(ctx context.Context, body dto.SignInRequest) (*
 
 // SignUp creates a new user.
 func (i auth) SignUp(ctx context.Context, body dto.SignUpRequest) (*dto.AuthDetailResp, error) {
-	reqBody, err := json.Marshal(body)
-	if err != nil {
-		logger.Logger.Error("failed in marshal sign up request with err: %s", err)
-		return nil, err
-	}
 	reqURL := fmt.Sprintf("%s/signup", i.authHost)
-	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, reqBody, func(req *http.Request) {
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, body, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
 	})
 	if err != nil {
@@ -142,6 +142,30 @@ func (i auth) User(ctx context.Context, token string) (*dto.User, error) {
 	return user, nil
 }
 
+// UpdateUser updates user data for a logged in user.
+func (i auth) UpdateUser(ctx context.Context, token string, body dto.UpdateUserRequest) (*dto.User, error) {
+	reqURL := fmt.Sprintf("%s/user", i.authHost)
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPut, body, func(req *http.Request) {
+		req.Header.Set(authorizationHeader, i.apiKey)
+		req.Header.Set(enum.Authorization.String(), fmt.Sprintf("%s %s", authPrefix, token))
+	})
+	if err != nil {
+		logger.Logger.Error("failed in update user httpclient call with err: %s", err)
+		return nil, err
+	}
+	if !httpclient.IsHTTPSuccess(httpResp.StatusCode) {
+		logger.Logger.Warn("getting %d in update user due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		return nil, catch.External(httpResp.Body.Bytes(), httpResp.StatusCode)
+	}
+	var user *dto.User
+	err = json.Unmarshal(httpResp.Body.Bytes(), &user)
+	if err != nil {
+		logger.Logger.Error("failed in unmarshal update user json with err: %s", err)
+		return nil, err
+	}
+	return user, nil
+}
+
 // SignOut sign user out
 func (i auth) SignOut(ctx context.Context, token string) error {
 	reqURL := fmt.Sprintf("%s/logout?scope=global", i.authHost)
@@ -161,13 +185,8 @@ func (i auth) SignOut(ctx context.Context, token string) error {
 }
 
 func (i auth) Verify(ctx context.Context, body dto.VerifyRequest) (*dto.AuthDetailResp, error) {
-	reqBody, err := json.Marshal(body)
-	if err != nil {
-		logger.Logger.Error("failed in marshal verify request with err: %s", err)
-		return nil, err
-	}
 	reqURL := fmt.Sprintf("%s/verify", i.authHost)
-	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, reqBody, func(req *http.Request) {
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, body, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
 	})
 	if err != nil {
@@ -192,13 +211,8 @@ func (i auth) RefreshToken(ctx context.Context, refreshToken string) (*dto.AuthD
 	body := dto.RefreshTokenReq{
 		RefreshToken: refreshToken,
 	}
-	reqBody, err := json.Marshal(body)
-	if err != nil {
-		logger.Logger.Error("failed in marshal refresh token request with err: %s", err)
-		return nil, err
-	}
 	reqURL := fmt.Sprintf("%s/token?grant_type=refresh_token", i.authHost)
-	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, reqBody, func(req *http.Request) {
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, body, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
 	})
 	if err != nil {
@@ -225,7 +239,7 @@ func (i auth) SignInWithOAuth(ctx context.Context, body dto.OAuthSignInRequest) 
 		logger.Logger.Error("failed in url parse with err: %s", err)
 		return "", err
 	}
-	qs, err := query.Values(body)
+	qs, err := httpclient.Values(body)
 	if err != nil {
 		logger.Logger.Error("failed in convert qs with err: %s", err)
 		return "", err
@@ -236,13 +250,8 @@ func (i auth) SignInWithOAuth(ctx context.Context, body dto.OAuthSignInRequest) 
 
 // SignInWithIDToken allows signing in with an OIDC ID token. The authentication provider used should be enabled and configured.
 func (i auth) SignInWithIDToken(ctx context.Context, body dto.SignInWithIDTokenRequest) (*dto.AuthDetailResp, error) {
-	reqBody, err := json.Marshal(body)
-	if err != nil {
-		logger.Logger.Error("failed in marshal sign in with id token request with err: %s", err)
-		return nil, err
-	}
 	reqURL := fmt.Sprintf("%s/token?grant_type=id_token", i.authHost)
-	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, reqBody, func(req *http.Request) {
+	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, body, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
 	})
 	if err != nil {

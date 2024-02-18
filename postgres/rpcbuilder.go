@@ -32,13 +32,9 @@ func (r *RpcRequestBuilder) Execute(result interface{}) error {
 }
 
 func (r *RpcRequestBuilder) ExecuteWithContext(ctx context.Context, result interface{}) error {
-	data, err := json.Marshal(r.params)
-	if err != nil {
-		return err
-	}
 	fullUrl := r.client.baseURL
 	fullUrl.Path += r.path
-	httpResp, err := r.client.httpClient.Call(ctx, fullUrl.String(), r.httpMethod, data, func(req *http.Request) {
+	httpResp, err := r.client.httpClient.Call(ctx, fullUrl.String(), r.httpMethod, r.params, func(req *http.Request) {
 		for k, values := range r.client.defaultHeaders {
 			for i := range values {
 				req.Header.Set(k, values[i])
