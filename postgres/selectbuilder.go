@@ -3,6 +3,8 @@ package postgres
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/lengzuo/supa/utils/enum"
 )
 
 //https://github.com/supabase/postgrest-js/blob/master/src/PostgrestTransformBuilder.ts#L191
@@ -11,9 +13,9 @@ type SelectRequestBuilder struct {
 	FilterRequestBuilder
 }
 
-// OrderBy sets the ordering column and direction for the SELECT request.
-func (b *SelectRequestBuilder) OrderBy(column, direction string) *SelectRequestBuilder {
-	b.params.Set("order", column+"."+direction)
+// Order sets the ordering column and direction for the SELECT request.
+func (b *SelectRequestBuilder) Order(column string, order enum.Order) *SelectRequestBuilder {
+	b.params.Set("order", column+"."+order.String())
 	return b
 }
 

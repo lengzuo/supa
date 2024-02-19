@@ -16,7 +16,7 @@ This gives you access to the `go-supa` package.
 
 ### Initialise client
 ```go
-conf := config.Supabase{
+conf := supabase.Config{
     // Your Supabase API key. 
     ApiKey:     os.Getenv("api_key"), 
     // Your Supabase project reference.
