@@ -19,14 +19,21 @@ func (b *SelectRequestBuilder) Order(column string, order enum.Order) *SelectReq
 	return b
 }
 
-// Range sets the range of rows to be returned for the SELECT request.
+// Range sets the range of rows to be returned for the SELECT request. Range is consist of offset and limit
 func (b *SelectRequestBuilder) Range(from, to int) *SelectRequestBuilder {
-	b.params.Set("range", fmt.Sprintf("%d-%d", from, to))
+	b.params.Set("offset", fmt.Sprintf("%d", from))
+	b.params.Set("limit", fmt.Sprintf("%d", to-from+1))
 	return b
 }
 
 // Limit the query result by `count`.
 func (b *SelectRequestBuilder) Limit(count int) *SelectRequestBuilder {
 	b.params.Set("limit", strconv.Itoa(count))
+	return b
+}
+
+// Offset skips specified number of rows.
+func (b *SelectRequestBuilder) Offset(number int) *SelectRequestBuilder {
+	b.params.Set("offset", strconv.Itoa(number))
 	return b
 }
