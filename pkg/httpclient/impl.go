@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -21,6 +22,7 @@ const (
 
 type Sender interface {
 	Call(ctx context.Context, fullUrl, method string, body any, customHeaders HeaderSetter) (*Resp, error)
+	Upload(ctx context.Context, fullUrl, method string, file io.Reader, customHeaders HeaderSetter) (*Resp, error)
 }
 
 type HeaderSetter func(req *http.Request)
@@ -94,6 +96,37 @@ func (c client) Call(ctx context.Context, fullUrl, method string, body any, cust
 
 	var httpResp *http.Response
 	logger.Logger.Debug("-------> %s %s: header:%s body:%s", method, fullUrl, printHeader(httpReq.Header), printBody(reqBody))
+	httpResp, err = c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer httpResp.Body.Close()
+
+	jsonBytes, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		logger.Logger.Error("failed in read all with err: %s", err)
+		return nil, err
+	}
+	respBody := *bytes.NewBuffer(jsonBytes)
+	logger.Logger.Debug("<------- %s: %d: %s", fullUrl, httpResp.StatusCode, respBody.Bytes())
+	return &Resp{
+		Body:       respBody,
+		Header:     httpResp.Header,
+		StatusCode: httpResp.StatusCode,
+	}, nil
+}
+
+func (c client) Upload(ctx context.Context, fullUrl, method string, file io.Reader, customHeaders HeaderSetter) (*Resp, error) {
+	fileData := bufio.NewReader(file)
+	httpReq, err := http.NewRequestWithContext(ctx, method, fullUrl, fileData)
+	if err != nil {
+		logger.Logger.Error("failed in new request with context with err: %s", err)
+		return nil, err
+	}
+	customHeaders(httpReq)
+
+	var httpResp *http.Response
+	logger.Logger.Debug("-------> %s %s: header:%s", method, fullUrl, printHeader(httpReq.Header))
 	httpResp, err = c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
