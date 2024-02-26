@@ -3,7 +3,7 @@ package supabase
 import (
 	"context"
 	"fmt"
-	"mime/multipart"
+	"io"
 	"net/http"
 
 	"github.com/lengzuo/supa/pkg/catch"
@@ -12,10 +12,9 @@ import (
 	"github.com/lengzuo/supa/utils/enum"
 )
 
-const applicationPDF = "application/pdf"
-
 type storageAPI interface {
-	UploadFile(ctx context.Context, targetFilePath string, fileHeader *multipart.FileHeader) error
+	GetPublicUrl(mediaPath string) string
+	UploadFile(ctx context.Context, targetFilePath, mimeType string, fileData io.Reader) error
 }
 
 type storage struct {
@@ -27,15 +26,12 @@ func newStorage(c client, bucket string) *storage {
 	return &storage{c, bucket}
 }
 
-func (i *storage) UploadFile(ctx context.Context, targetFilePath string, fileHeader *multipart.FileHeader) error {
-	fileBuffer, err := httpclient.GetFileBuffer(fileHeader, nil)
-	if err != nil {
-		return err
-	}
+func (i *storage) UploadFile(ctx context.Context, targetFilePath, mimeType string, fileData io.Reader) error {
 	reqURL := fmt.Sprintf("%s/object/%s/%s", i.storageHost, i.bucket, targetFilePath)
-	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, fileBuffer.Bytes(), func(req *http.Request) {
+	httpResp, err := i.httpClient.Upload(ctx, reqURL, http.MethodPost, fileData, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
-		req.Header.Set(enum.ContentType.String(), applicationPDF)
+		req.Header.Set(enum.Authorization.String(), fmt.Sprintf("%s %s", authPrefix, i.apiKey))
+		req.Header.Set(enum.ContentType.String(), mimeType)
 	})
 	if err != nil {
 		logger.Logger.Error("failed in httpclient call with catch: %s", err)
@@ -46,4 +42,8 @@ func (i *storage) UploadFile(ctx context.Context, targetFilePath string, fileHea
 		return catch.External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	return nil
+}
+
+func (i *storage) GetPublicUrl(mediaPath string) string {
+	return i.storageHost + "/object/public/" + i.bucket + "/" + mediaPath
 }
