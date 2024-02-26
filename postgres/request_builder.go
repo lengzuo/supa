@@ -105,15 +105,11 @@ type QueryRequestBuilder struct {
 	json       interface{}
 }
 
-// ExecuteWithContext sends the query request with the provided context and unmarshal the response JSON into the provided object.
-func (b *QueryRequestBuilder) ExecuteWithContext(ctx context.Context, result interface{}) error {
-	query, err := url.QueryUnescape(b.params.Encode())
-	if err != nil {
-		return err
-	}
+// Execute sends the query request with the provided context and unmarshal the response JSON into the provided object.
+func (b *QueryRequestBuilder) Execute(ctx context.Context, result interface{}) error {
 	fullUrl := b.client.baseURL
 	fullUrl.Path += b.path
-	fullUrl.RawQuery = query
+	fullUrl.RawQuery = b.params.Encode()
 	httpResp, err := b.client.httpClient.Call(ctx, fullUrl.String(), b.httpMethod, b.json, func(req *http.Request) {
 		for k, values := range b.client.defaultHeaders {
 			for i := range values {
@@ -135,7 +131,7 @@ func (b *QueryRequestBuilder) ExecuteWithContext(ctx context.Context, result int
 		return err
 	}
 	if !httpclient.IsHTTPSuccess(httpResp.StatusCode) {
-		logger.Logger.Warn("getting %d in sign in with password due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Logger.Warn("getting %d in execute with context due to err: %s", httpResp.StatusCode, httpResp.Body.String())
 		var reqError Error
 		if err = json.Unmarshal(httpResp.Body.Bytes(), &reqError); err != nil {
 			return err

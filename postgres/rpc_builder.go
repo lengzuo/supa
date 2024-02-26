@@ -27,11 +27,7 @@ func (c *Client) RPC(f string, params interface{}) *RpcRequestBuilder {
 	}
 }
 
-func (r *RpcRequestBuilder) Execute(result interface{}) error {
-	return r.ExecuteWithContext(context.Background(), result)
-}
-
-func (r *RpcRequestBuilder) ExecuteWithContext(ctx context.Context, result interface{}) error {
+func (r *RpcRequestBuilder) Execute(ctx context.Context, result interface{}) error {
 	fullUrl := r.client.baseURL
 	fullUrl.Path += r.path
 	httpResp, err := r.client.httpClient.Call(ctx, fullUrl.String(), r.httpMethod, r.params, func(req *http.Request) {
