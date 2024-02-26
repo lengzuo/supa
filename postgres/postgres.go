@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	applicationJson   = "application/json;charset=UTF-8"
 	connectionTimeout = 15 * time.Second
 )
 
@@ -23,7 +22,7 @@ type API interface {
 
 // Client refer from https://github.com/supabase/postgrest-js/blob/master/src/PostgrestClient.ts
 type Client struct {
-	baseURL        *url.URL
+	baseURL        url.URL
 	defaultHeaders http.Header
 	httpClient     httpclient.Sender
 	debug          bool
@@ -56,7 +55,7 @@ func New(baseURL string, opts ...Option) *Client {
 	}
 	c := Client{
 		httpClient:     httpclient.New(connectionTimeout),
-		baseURL:        base,
+		baseURL:        *base,
 		defaultHeaders: make(http.Header),
 	}
 	for _, opt := range opts {
