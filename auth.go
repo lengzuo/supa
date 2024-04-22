@@ -17,6 +17,7 @@ import (
 type authAPI interface {
 	ResetPasswordForEmail(ctx context.Context, body dto.ResetPasswordForEmailRequest) error
 	RefreshToken(ctx context.Context, refreshToken string) (*dto.AuthDetailResp, error)
+	SignInAnonymously(ctx context.Context, body dto.SignInAnonymousRequest) (*dto.AuthDetailResp, error)
 	SignInWithIDToken(ctx context.Context, body dto.SignInWithIDTokenRequest) (*dto.AuthDetailResp, error)
 	SignInWithOAuth(ctx context.Context, body dto.OAuthSignInRequest) (string, error)
 	SignInWithOTP(ctx context.Context, body dto.SignInRequest) error
@@ -246,6 +247,15 @@ func (i auth) SignInWithOAuth(ctx context.Context, body dto.OAuthSignInRequest) 
 	}
 	authURL.RawQuery = qs.Encode()
 	return authURL.String(), nil
+}
+
+// SignInAnonymously use to create a new anonymous user.
+func (i auth) SignInAnonymously(ctx context.Context, body dto.SignInAnonymousRequest) (*dto.AuthDetailResp, error) {
+	signUpReq := dto.SignUpRequest{
+		Data:               body.Data,
+		GotrueMetaSecurity: body.GotrueMetaSecurity,
+	}
+	return i.SignUp(ctx, signUpReq)
 }
 
 // SignInWithIDToken allows signing in with an OIDC ID token. The authentication provider used should be enabled and configured.
