@@ -87,3 +87,8 @@ type UpdateUserRequest struct {
 	Data       interface{} `json:"data,omitempty" url:"-"`
 	RedirectTo string      `json:"-" url:"redirect_to,omitempty"`
 }
+
+type SignInAnonymousRequest struct {
+	GotrueMetaSecurity GotrueMeta  `json:"gotrue_meta_security,omitempty" url:"-"`
+	Data               interface{} `json:"data,omitempty" url:"-"`
+}
