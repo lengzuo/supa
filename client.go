@@ -15,7 +15,6 @@ type client struct {
 	httpClient  httpclient.Sender
 	apiKey      string
 	authHost    string
-	restHost    string
 	storageHost string
 	debug       bool
 }
@@ -23,10 +22,8 @@ type client struct {
 const (
 	authorizationHeader = "apiKey"
 	httpTimeout         = 20 * time.Second
-	apiHostFormat       = "https://%s.supabase.co"
 	authAPIPath         = "/auth/v1"
 	storageAPIPath      = "/storage/v1"
-	restAPIPath         = "/rest/v1"
 	authPrefix          = "Bearer"
 )
 
@@ -46,18 +43,17 @@ func New(cfg Config) (*Client, error) {
 	// Singleton logger
 	logger.New(cfg.Debug)
 
-	apiHost := fmt.Sprintf(apiHostFormat, cfg.ProjectRef)
+	apiHost := fmt.Sprintf(common.APIHostFormat, cfg.ProjectRef)
 	httpClient := httpclient.New(httpTimeout)
 
 	authClient := client{
 		httpClient:  httpClient,
 		apiKey:      cfg.ApiKey,
 		authHost:    apiHost + authAPIPath,
-		restHost:    apiHost + restAPIPath,
 		storageHost: apiHost + storageAPIPath,
 	}
 	supaDB := postgres.New(
-		authClient.restHost,
+		cfg.ProjectRef,
 		postgres.WithToken(cfg.ApiKey),
 		postgres.With(authorizationHeader, cfg.ApiKey),
 	)

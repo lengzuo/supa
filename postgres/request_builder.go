@@ -111,11 +111,6 @@ func (b *QueryRequestBuilder) Execute(ctx context.Context, result interface{}) e
 	fullUrl.Path += b.path
 	fullUrl.RawQuery = b.params.Encode()
 	httpResp, err := b.client.httpClient.Call(ctx, fullUrl.String(), b.httpMethod, b.json, func(req *http.Request) {
-		for k, values := range b.client.defaultHeaders {
-			for i := range values {
-				req.Header.Set(k, values[i])
-			}
-		}
 		for k, values := range b.header {
 			for i := range values {
 				req.Header.Set(k, values[i])

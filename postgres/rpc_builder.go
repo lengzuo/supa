@@ -17,11 +17,15 @@ type RpcRequestBuilder struct {
 	params     interface{}
 }
 
-func (c *Client) RPC(f string, params interface{}) *RpcRequestBuilder {
+func (c *Client) RPC(f string, params interface{}, opts ...HeaderOption) *RpcRequestBuilder {
+	header := c.defaultHeaders.Clone()
+	for _, opt := range opts {
+		header.Set(opt.Key, opt.Value)
+	}
 	return &RpcRequestBuilder{
 		client:     c,
 		path:       "/rpc/" + f,
-		header:     http.Header{},
+		header:     header,
 		httpMethod: http.MethodPost,
 		params:     params,
 	}
@@ -31,7 +35,7 @@ func (r *RpcRequestBuilder) Execute(ctx context.Context, result interface{}) err
 	fullUrl := r.client.baseURL
 	fullUrl.Path += r.path
 	httpResp, err := r.client.httpClient.Call(ctx, fullUrl.String(), r.httpMethod, r.params, func(req *http.Request) {
-		for k, values := range r.client.defaultHeaders {
+		for k, values := range r.header {
 			for i := range values {
 				req.Header.Set(k, values[i])
 			}
