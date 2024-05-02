@@ -8,16 +8,18 @@ import (
 	"time"
 
 	"github.com/lengzuo/supa/pkg/httpclient"
+	"github.com/lengzuo/supa/utils/common"
 	"github.com/lengzuo/supa/utils/enum"
 )
 
 const (
 	connectionTimeout = 15 * time.Second
+	restAPIPath       = "/rest/v1"
 )
 
 type API interface {
-	From(table string) *RequestBuilder
-	RPC(f string, params interface{}) *RpcRequestBuilder
+	From(table string, opts ...HeaderOption) *RequestBuilder
+	RPC(f string, params interface{}, opts ...HeaderOption) *RpcRequestBuilder
 }
 
 // Client refer from https://github.com/supabase/postgrest-js/blob/master/src/PostgrestClient.ts
@@ -26,6 +28,18 @@ type Client struct {
 	defaultHeaders http.Header
 	httpClient     httpclient.Sender
 	debug          bool
+}
+
+type HeaderOption struct {
+	Key   string
+	Value string
+}
+
+func AuthToken(token string) HeaderOption {
+	return HeaderOption{
+		Key:   enum.Authorization.String(),
+		Value: "Bearer " + token,
+	}
 }
 
 type Option func(c *Client)
@@ -48,8 +62,9 @@ func WithBasicAuth(username, password string) Option {
 	}
 }
 
-func New(baseURL string, opts ...Option) *Client {
-	base, err := url.Parse(baseURL)
+func New(projectRef string, opts ...Option) *Client {
+	apiHost := fmt.Sprintf(common.APIHostFormat, projectRef)
+	base, err := url.Parse(apiHost + restAPIPath)
 	if err != nil {
 		panic(fmt.Sprintf("invalid url provided in postgres new"))
 	}
@@ -64,17 +79,17 @@ func New(baseURL string, opts ...Option) *Client {
 	return &c
 }
 
-func (c *Client) From(table string) *RequestBuilder {
+func (c *Client) From(table string, opts ...HeaderOption) *RequestBuilder {
+	header := c.defaultHeaders.Clone()
+	for _, opt := range opts {
+		header.Set(opt.Key, opt.Value)
+	}
 	return &RequestBuilder{
 		client: c,
 		path:   "/" + table,
-		header: http.Header{},
+		header: header,
 		params: url.Values{},
 	}
-}
-
-func (c *Client) headers() http.Header {
-	return c.defaultHeaders.Clone()
 }
 
 func (c *Client) addHeader(key string, value string) {
