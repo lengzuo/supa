@@ -42,12 +42,12 @@ type SignInRequest struct {
 }
 
 type VerifyRequest struct {
-	Email       string `json:"email" url:"-"`
-	Phone       string `json:"phone,omitempty" url:"-"`
-	Token       string `json:"token,omitempty" url:"-"`
-	TokenHash   string `json:"token_hash,omitempty" url:"-"`
-	Type        string `json:"type,omitempty" url:"-"`
-	HttpOptions HttpOptions
+	Email       string      `json:"email" url:"-"`
+	Phone       string      `json:"phone,omitempty" url:"-"`
+	Token       string      `json:"token,omitempty" url:"-"`
+	TokenHash   string      `json:"token_hash,omitempty" url:"-"`
+	Type        string      `json:"type,omitempty" url:"-"`
+	HttpOptions HttpOptions `json:"-" url:"-"`
 }
 
 type SignUpRequest struct {
@@ -58,38 +58,38 @@ type SignUpRequest struct {
 	Phone              string      `json:"phone,omitempty" url:"-"`
 	Channel            string      `json:"channel,omitempty" url:"-"`
 	EmailRedirectTo    string      `json:"-" url:"redirect_to,omitempty"`
-	HttpOptions        HttpOptions
+	HttpOptions        HttpOptions `json:"-" url:"-"`
 }
 
 type RefreshTokenRequest struct {
-	RefreshToken string `json:"refresh_token,omitempty" url:"-"`
-	HttpOptions  HttpOptions
+	RefreshToken string      `json:"refresh_token,omitempty" url:"-"`
+	HttpOptions  HttpOptions `json:"-" url:"-"`
 }
 
 type OAuthSignInRequest struct {
-	RedirectTo       string `json:"-" url:"redirect_to,omitempty"`
-	Scopes           string `json:"-" url:"scopes,omitempty"`
-	Provider         string `json:"-" url:"provider,omitempty"`
-	SkipHTTPRedirect string `json:"-" url:"skip_http_redirect,omitempty"`
-	HttpOptions      HttpOptions
+	RedirectTo       string      `json:"-" url:"redirect_to,omitempty"`
+	Scopes           string      `json:"-" url:"scopes,omitempty"`
+	Provider         string      `json:"-" url:"provider,omitempty"`
+	SkipHTTPRedirect string      `json:"-" url:"skip_http_redirect,omitempty"`
+	HttpOptions      HttpOptions `json:"-" url:"-"`
 }
 
 type SignInWithIDTokenRequest struct {
-	AccessToken        string     `json:"access_token" url:"-"`
-	GotrueMetaSecurity GotrueMeta `json:"gotrue_meta_security,omitempty" url:"-"`
-	IDToken            string     `json:"id_token" url:"-"`
-	Nonce              string     `json:"nonce" url:"-"`
-	Provider           string     `json:"provider,omitempty" url:"-"`
-	HttpOptions        HttpOptions
+	AccessToken        string      `json:"access_token" url:"-"`
+	GotrueMetaSecurity GotrueMeta  `json:"gotrue_meta_security,omitempty" url:"-"`
+	IDToken            string      `json:"id_token" url:"-"`
+	Nonce              string      `json:"nonce" url:"-"`
+	Provider           string      `json:"provider,omitempty" url:"-"`
+	HttpOptions        HttpOptions `json:"-" url:"-"`
 }
 
 type ResetPasswordForEmailRequest struct {
-	Email               string     `json:"email" url:"-"`
-	CodeChallengeMethod string     `json:"code_challenge_method,omitempty" url:"-"`
-	CodeChallenge       string     `json:"code_challenge,omitempty" url:"-"`
-	GotrueMetaSecurity  GotrueMeta `json:"gotrue_meta_security,omitempty" url:"-"`
-	RedirectTo          string     `json:"-" url:"redirect_to,omitempty"`
-	HttpOptions         HttpOptions
+	Email               string      `json:"email" url:"-"`
+	CodeChallengeMethod string      `json:"code_challenge_method,omitempty" url:"-"`
+	CodeChallenge       string      `json:"code_challenge,omitempty" url:"-"`
+	GotrueMetaSecurity  GotrueMeta  `json:"gotrue_meta_security,omitempty" url:"-"`
+	RedirectTo          string      `json:"-" url:"redirect_to,omitempty"`
+	HttpOptions         HttpOptions `json:"-" url:"-"`
 }
 
 type UpdateUserRequest struct {
@@ -99,11 +99,11 @@ type UpdateUserRequest struct {
 	Nonce       string      `json:"nonce,omitempty" url:"-"`
 	Data        interface{} `json:"data,omitempty" url:"-"`
 	RedirectTo  string      `json:"-" url:"redirect_to,omitempty"`
-	HttpOptions HttpOptions
+	HttpOptions HttpOptions `json:"-" url:"-"`
 }
 
 type SignInAnonymousRequest struct {
 	GotrueMetaSecurity GotrueMeta  `json:"gotrue_meta_security,omitempty" url:"-"`
 	Data               interface{} `json:"data,omitempty" url:"-"`
-	HttpOptions        HttpOptions
+	HttpOptions        HttpOptions `json:"-" url:"-"`
 }
