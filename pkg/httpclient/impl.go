@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/lengzuo/supa/pkg/logger"
@@ -32,7 +34,7 @@ type client struct {
 }
 
 // New to create client pool
-func New(timeout time.Duration) *client {
+func New(timeout time.Duration, proxy string) *client {
 	if timeout <= 0 {
 		panic("timeout must be specific > 0")
 	}
@@ -46,6 +48,16 @@ func New(timeout time.Duration) *client {
 				}).DialContext,
 				TLSHandshakeTimeout: timeout,
 				DisableKeepAlives:   false,
+				Proxy: func(req *http.Request) (*url.URL, error) {
+					if proxy == "" {
+						return nil, nil
+					}
+
+					return url.Parse(proxy)
+				},
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, // allow local proxies like burp, mitmproxy, etc.
+				},
 			},
 			Timeout: timeout,
 		},
