@@ -62,14 +62,14 @@ func WithBasicAuth(username, password string) Option {
 	}
 }
 
-func New(projectRef string, opts ...Option) *Client {
+func New(projectRef string, proxy string, opts ...Option) *Client {
 	apiHost := fmt.Sprintf(common.APIHostFormat, projectRef)
 	base, err := url.Parse(apiHost + restAPIPath)
 	if err != nil {
 		panic(fmt.Sprintf("invalid url provided in postgres new"))
 	}
 	c := Client{
-		httpClient:     httpclient.New(connectionTimeout),
+		httpClient:     httpclient.New(connectionTimeout, proxy),
 		baseURL:        *base,
 		defaultHeaders: make(http.Header),
 	}

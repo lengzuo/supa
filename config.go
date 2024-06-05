@@ -5,4 +5,5 @@ type Config struct {
 	Bucket     string
 	ProjectRef string
 	Debug      bool
+	Proxy      string
 }

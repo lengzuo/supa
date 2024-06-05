@@ -44,7 +44,7 @@ func New(cfg Config) (*Client, error) {
 	logger.New(cfg.Debug)
 
 	apiHost := fmt.Sprintf(common.APIHostFormat, cfg.ProjectRef)
-	httpClient := httpclient.New(httpTimeout)
+	httpClient := httpclient.New(httpTimeout, cfg.Proxy)
 
 	authClient := client{
 		httpClient:  httpClient,
@@ -54,6 +54,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	supaDB := postgres.New(
 		cfg.ProjectRef,
+		cfg.Proxy,
 		postgres.WithToken(cfg.ApiKey),
 		postgres.With(authorizationHeader, cfg.ApiKey),
 	)
