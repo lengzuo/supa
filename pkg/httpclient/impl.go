@@ -21,8 +21,8 @@ const (
 )
 
 type Sender interface {
-	Call(ctx context.Context, fullUrl, method string, body any, customHeaders HeaderSetter) (*Resp, error)
-	Upload(ctx context.Context, fullUrl, method string, file io.Reader, customHeaders HeaderSetter) (*Resp, error)
+	Call(ctx context.Context, fullUrl, method string, body any, customHeaders ...HeaderSetter) (*Resp, error)
+	Upload(ctx context.Context, fullUrl, method string, file io.Reader, customHeaders ...HeaderSetter) (*Resp, error)
 }
 
 type HeaderSetter func(req *http.Request)
@@ -71,7 +71,7 @@ func printHeader(header http.Header) []byte {
 	return nil
 }
 
-func (c client) Call(ctx context.Context, fullUrl, method string, body any, customHeaders HeaderSetter) (*Resp, error) {
+func (c client) Call(ctx context.Context, fullUrl, method string, body any, headerSetters ...HeaderSetter) (*Resp, error) {
 	qs, err := Values(body)
 	if err != nil {
 		logger.Logger.Error("failed in retrieving query string with err: %s", err)
@@ -92,7 +92,11 @@ func (c client) Call(ctx context.Context, fullUrl, method string, body any, cust
 	}
 	httpReq.Header.Set(headerContentType, applicationJSON)
 	httpReq.Header.Set(headerAccept, applicationJSON)
-	customHeaders(httpReq)
+	for _, headerSetter := range headerSetters {
+		if headerSetter != nil {
+			headerSetter(httpReq)
+		}
+	}
 
 	var httpResp *http.Response
 	logger.Logger.Debug("-------> %s %s: header:%s body:%s", method, fullUrl, printHeader(httpReq.Header), printBody(reqBody))
@@ -116,14 +120,18 @@ func (c client) Call(ctx context.Context, fullUrl, method string, body any, cust
 	}, nil
 }
 
-func (c client) Upload(ctx context.Context, fullUrl, method string, file io.Reader, customHeaders HeaderSetter) (*Resp, error) {
+func (c client) Upload(ctx context.Context, fullUrl, method string, file io.Reader, headerSetters ...HeaderSetter) (*Resp, error) {
 	fileData := bufio.NewReader(file)
 	httpReq, err := http.NewRequestWithContext(ctx, method, fullUrl, fileData)
 	if err != nil {
 		logger.Logger.Error("failed in new request with context with err: %s", err)
 		return nil, err
 	}
-	customHeaders(httpReq)
+	for _, headerSetter := range headerSetters {
+		if headerSetter != nil {
+			headerSetter(httpReq)
+		}
+	}
 
 	var httpResp *http.Response
 	logger.Logger.Debug("-------> %s %s: header:%s", method, fullUrl, printHeader(httpReq.Header))
