@@ -31,16 +31,17 @@ func (c *Client) RPC(f string, params interface{}, opts ...HeaderOption) *RpcReq
 	}
 }
 
-func (r *RpcRequestBuilder) Execute(ctx context.Context, result interface{}) error {
-	fullUrl := r.client.baseURL
-	fullUrl.Path += r.path
-	httpResp, err := r.client.httpClient.Call(ctx, fullUrl.String(), r.httpMethod, r.params, func(req *http.Request) {
+func (r *RpcRequestBuilder) Execute(ctx context.Context, result interface{}, headerSetters ...httpclient.HeaderSetter) error {
+	headerSetters = append(headerSetters, func(req *http.Request) {
 		for k, values := range r.header {
 			for i := range values {
 				req.Header.Set(k, values[i])
 			}
 		}
 	})
+	fullUrl := r.client.baseURL
+	fullUrl.Path += r.path
+	httpResp, err := r.client.httpClient.Call(ctx, fullUrl.String(), r.httpMethod, r.params, headerSetters...)
 	if err != nil {
 		logger.Logger.Error("failed in httpclient call with err: %s", err)
 		return err

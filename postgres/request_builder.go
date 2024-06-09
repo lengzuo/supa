@@ -106,11 +106,8 @@ type QueryRequestBuilder struct {
 }
 
 // Execute sends the query request with the provided context and unmarshal the response JSON into the provided object.
-func (b *QueryRequestBuilder) Execute(ctx context.Context, result interface{}) error {
-	fullUrl := b.client.baseURL
-	fullUrl.Path += b.path
-	fullUrl.RawQuery = b.params.Encode()
-	httpResp, err := b.client.httpClient.Call(ctx, fullUrl.String(), b.httpMethod, b.json, func(req *http.Request) {
+func (b *QueryRequestBuilder) Execute(ctx context.Context, result interface{}, headerSetters ...httpclient.HeaderSetter) error {
+	headerSetters = append(headerSetters, func(req *http.Request) {
 		for k, values := range b.header {
 			for i := range values {
 				req.Header.Set(k, values[i])
@@ -121,6 +118,10 @@ func (b *QueryRequestBuilder) Execute(ctx context.Context, result interface{}) e
 			req.Header.Set("Prefer", "")
 		}
 	})
+	fullUrl := b.client.baseURL
+	fullUrl.Path += b.path
+	fullUrl.RawQuery = b.params.Encode()
+	httpResp, err := b.client.httpClient.Call(ctx, fullUrl.String(), b.httpMethod, b.json, headerSetters...)
 	if err != nil {
 		logger.Logger.Error("failed in httpclient call with err: %s", err)
 		return err
