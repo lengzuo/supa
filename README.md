@@ -32,6 +32,54 @@ if err != nil {
 // Start using `supaClient` in your go project 
 ```
 
+### Initialise with your own http client and header
+```go
+func myHttpClient() *http.Client {
+    return http.DefaultClient
+}
+
+func newCustomClient() {
+    postgresHeader := map[string]string{
+        "Accept-Profile":  "public",
+        "Content-Profile": "public",
+        "X-Client-Info":   "v0.1.1",
+    }
+    header := map[string]string{
+        "CustomHeader": "myCustomHeader",
+    }
+    conf := supabase.Config{
+        // Your Supabase API key. 
+        ApiKey:     os.Getenv("api_key"),
+        // Your Supabase project reference.
+        ProjectRef: os.Getenv("project_ref"),
+        // Set Debug to `false` if you don't want to print log
+        Debug:      true,
+        // Use this options to override /auth with your http client and your header 
+	    AuthOptions: []supabase.AuthOption{
+            supabase.WithAuthClient(myHttpClient(), header),
+        },
+        // Use this options to override postgres with your own http client and your header 
+        PostgresOptions: []supabase.PostgresOption{
+            supabase.WithPostgresClient(myHttpClient(), postgresHeader),
+        },
+    }
+    supaClient, err := supabase.New(conf)
+    if err != nil {
+        fmt.Printf("failed in initialise client with err: %s", err)
+    }
+    // Start using `supaClient` in your go project 
+}
+```
+
+### Sign up
+```go
+body := dto.SignUpRequest{
+    Email:    "test@test.com",
+    Password: "abcd1234",
+}
+resp, err := supaClient.Auth.SignUp(ctx, body)
+```
+
 ### Sign up
 ```go
 body := dto.SignUpRequest{
@@ -120,6 +168,15 @@ u := T{
 }
 query := supaClient.DB.From("test").Insert(u)
 err := query.ExecuteWithContext(ctx, nil)
+```
+
+### Passing auth token in your query
+```go
+ctx := context.Background()
+var u []YourStruct
+query := supaClient.DB.From("user_plans", supabase.AuthToken("mytoken")).Select("*")
+err := query.ExecuteWithContext(ctx, &u)
+log.Debug("query output: %#v", u)
 ```
 
 ### Delete row [No result return]
