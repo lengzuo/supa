@@ -1,23 +1,20 @@
-package postgres
+package supabase
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
-
-	"github.com/lengzuo/supa/pkg/httpclient"
-	"github.com/lengzuo/supa/pkg/logger"
 )
 
 type RpcRequestBuilder struct {
-	client     *Client
+	client     *PostgresClient
 	path       string
 	header     http.Header
 	httpMethod string
 	params     interface{}
 }
 
-func (c *Client) RPC(f string, params interface{}, opts ...HeaderOption) *RpcRequestBuilder {
+func (c *PostgresClient) RPC(f string, params interface{}, opts ...HeaderOption) *RpcRequestBuilder {
 	header := c.defaultHeaders.Clone()
 	for _, opt := range opts {
 		header.Set(opt.Key, opt.Value)
@@ -42,12 +39,12 @@ func (r *RpcRequestBuilder) Execute(ctx context.Context, result interface{}) err
 		}
 	})
 	if err != nil {
-		logger.Logger.Error("failed in httpclient call with err: %s", err)
+		logger.Error("failed in httpclient call with err: %s", err)
 		return err
 	}
-	if !httpclient.IsHTTPSuccess(httpResp.StatusCode) {
-		logger.Logger.Warn("getting %d in sign in with password due to err: %s", httpResp.StatusCode, httpResp.Body.String())
-		var reqError Error
+	if !isHTTPSuccess(httpResp.StatusCode) {
+		logger.Warn("getting %d in sign in with password due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		var reqError PostgresError
 		if err = json.Unmarshal(httpResp.Body.Bytes(), &reqError); err != nil {
 			return err
 		}

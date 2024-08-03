@@ -5,11 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/lengzuo/supa/pkg/catch"
-	"github.com/lengzuo/supa/pkg/httpclient"
-	"github.com/lengzuo/supa/pkg/logger"
-	"github.com/lengzuo/supa/utils/enum"
 )
 
 type storageAPI interface {
@@ -17,33 +12,52 @@ type storageAPI interface {
 	UploadFile(ctx context.Context, targetFilePath, mimeType string, fileData io.Reader) error
 }
 
-type storage struct {
-	client
-	bucket string
+type Storage struct {
+	apiKey      string
+	storageHost string
+	bucket      string
+	httpClient  Sender
 }
 
-func newStorage(c client, bucket string) *storage {
-	return &storage{c, bucket}
+type StorageOption func(c *Storage)
+
+func WithStorageClient(httpClient *http.Client, header map[string]string) StorageOption {
+	return func(c *Storage) {
+		c.httpClient = newRequester(httpClient, header)
+	}
 }
 
-func (i *storage) UploadFile(ctx context.Context, targetFilePath, mimeType string, fileData io.Reader) error {
+func NewStorage(apiKey, storageHost, bucket string, options ...StorageOption) *Storage {
+	impl := &Storage{
+		apiKey:      apiKey,
+		storageHost: storageHost,
+		bucket:      bucket,
+		httpClient:  defaultSender(httpTimeout, make(map[string]string)),
+	}
+	for _, opt := range options {
+		opt(impl)
+	}
+	return impl
+}
+
+func (i *Storage) UploadFile(ctx context.Context, targetFilePath, mimeType string, fileData io.Reader) error {
 	reqURL := fmt.Sprintf("%s/object/%s/%s", i.storageHost, i.bucket, targetFilePath)
 	httpResp, err := i.httpClient.Upload(ctx, reqURL, http.MethodPost, fileData, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
-		req.Header.Set(enum.Authorization.String(), fmt.Sprintf("%s %s", authPrefix, i.apiKey))
-		req.Header.Set(enum.ContentType.String(), mimeType)
+		req.Header.Set(HeaderAuthorization.String(), fmt.Sprintf("%s %s", authPrefix, i.apiKey))
+		req.Header.Set(HeaderContentType.String(), mimeType)
 	})
 	if err != nil {
-		logger.Logger.Error("failed in httpclient call with catch: %s", err)
+		logger.Error("failed in httpclient call with catch: %s", err)
 		return err
 	}
-	if !httpclient.IsHTTPSuccess(httpResp.StatusCode) {
-		logger.Logger.Warn("getting %d in sign out due to catch: %s", httpResp.StatusCode, httpResp.Body.String())
-		return catch.External(httpResp.Body.Bytes(), httpResp.StatusCode)
+	if !isHTTPSuccess(httpResp.StatusCode) {
+		logger.Warn("getting %d in sign out due to catch: %s", httpResp.StatusCode, httpResp.Body.String())
+		return External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	return nil
 }
 
-func (i *storage) GetPublicUrl(mediaPath string) string {
+func (i *Storage) GetPublicUrl(mediaPath string) string {
 	return i.storageHost + "/object/public/" + i.bucket + "/" + mediaPath
 }

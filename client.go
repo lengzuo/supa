@@ -2,21 +2,16 @@ package supabase
 
 import (
 	"fmt"
+	"net"
+	"net/http"
 	"strings"
 	"time"
-
-	"github.com/lengzuo/supa/pkg/httpclient"
-	"github.com/lengzuo/supa/pkg/logger"
-	"github.com/lengzuo/supa/postgres"
-	"github.com/lengzuo/supa/utils/common"
 )
 
-type client struct {
-	httpClient  httpclient.Sender
-	apiKey      string
-	authHost    string
-	storageHost string
-	debug       bool
+type clientConfig struct {
+	httpClient *http.Client
+	httpHeader map[string]string
+	schema     string
 }
 
 const (
@@ -31,35 +26,48 @@ type Client struct {
 	// Auth refer from https://github.com/supabase/gotrue-js/blob/master/src/GoTrueClient.ts and https://github.com/supabase/gotrue-js/blob/master/src/GoTrueAdminApi.ts
 	Auth authAPI
 	// DB refer from https://github.com/nedpals/supabase-go/tree/master
-	DB postgres.API
+	DB PostgresAPI
 	// Storage
 	Storage storageAPI
 }
 
 func New(cfg Config) (*Client, error) {
 	if len(strings.TrimSpace(cfg.ApiKey)) == 0 {
-		return nil, common.ErrEmptyApiKey
+		return nil, ErrEmptyApiKey
 	}
 	// Singleton logger
-	logger.New(cfg.Debug)
+	newLogger(cfg.Debug)
 
-	apiHost := fmt.Sprintf(common.APIHostFormat, cfg.ProjectRef)
-	httpClient := httpclient.New(httpTimeout)
+	apiHost := fmt.Sprintf(apiHostFormat, cfg.ProjectRef)
 
-	authClient := client{
-		httpClient:  httpClient,
-		apiKey:      cfg.ApiKey,
-		authHost:    apiHost + authAPIPath,
-		storageHost: apiHost + storageAPIPath,
-	}
-	supaDB := postgres.New(
+	supaDB := NewPostgres(
 		cfg.ProjectRef,
-		postgres.WithToken(cfg.ApiKey),
-		postgres.With(authorizationHeader, cfg.ApiKey),
+		WithToken(cfg.ApiKey),
+		With(authorizationHeader, cfg.ApiKey),
 	)
+	for _, opt := range cfg.PostgresOptions {
+		opt(supaDB)
+	}
+
 	return &Client{
-		Auth:    newAuth(authClient),
+		Auth:    NewAuth(cfg.ApiKey, apiHost+authAPIPath, cfg.AuthOptions...),
 		DB:      supaDB,
-		Storage: newStorage(authClient, cfg.Bucket),
+		Storage: NewStorage(cfg.ApiKey, apiHost+storageAPIPath, cfg.Bucket, cfg.StorageOptions...),
 	}, nil
+}
+
+func defaultSender(timeout time.Duration, header map[string]string) Sender {
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConnsPerHost: 1000,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout: timeout,
+			DisableKeepAlives:   false,
+		},
+		Timeout: timeout,
+	}
+	return newRequester(httpClient, header)
 }
