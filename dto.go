@@ -1,4 +1,6 @@
-package dto
+package supabase
+
+import "time"
 
 type AuthDetailResp struct {
 	AccessToken          string `json:"access_token,omitempty" url:"-"`
@@ -89,6 +91,41 @@ type UpdateUserRequest struct {
 }
 
 type SignInAnonymousRequest struct {
-	GotrueMetaSecurity GotrueMeta  `json:"gotrue_meta_security,omitempty" url:"-"`
 	Data               interface{} `json:"data,omitempty" url:"-"`
+	GotrueMetaSecurity GotrueMeta  `json:"gotrue_meta_security,omitempty" url:"-"`
+}
+
+type TransformOptions struct {
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Resize  string `json:"resize"`
+	Format  string `json:"format"`
+	Quality int    `json:"quality"`
+}
+
+type UrlOptions struct {
+	Transform *TransformOptions `json:"transform"`
+	Download  bool              `json:"download"`
+}
+
+type AppMetadata struct {
+	Provider string `json:"provider"`
+}
+
+type UserMeta struct {
+	Name string `json:"name"`
+}
+
+type User struct {
+	ID                 string      `json:"id"`
+	Aud                string      `json:"aud"`
+	Role               string      `json:"role"`
+	Email              string      `json:"email"`
+	InvitedAt          time.Time   `json:"invited_at"`
+	ConfirmedAt        time.Time   `json:"confirmed_at"`
+	ConfirmationSentAt time.Time   `json:"confirmation_sent_at"`
+	AppMetadata        AppMetadata `json:"app_metadata"`
+	Metadata           UserMeta    `json:"user_metadata"`
+	CreatedAt          time.Time   `json:"created_at"`
+	UpdatedAt          time.Time   `json:"updated_at"`
 }

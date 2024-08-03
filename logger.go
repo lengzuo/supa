@@ -1,4 +1,4 @@
-package logger
+package supabase
 
 import (
 	"fmt"
@@ -35,21 +35,21 @@ var (
 		"error": colorize(levelError, colorRed),
 		"fatal": colorize(levelFatal, colorGreen),
 	}
-	Logger *zeroLogger
+	logger *zeroLogger
 )
 
 type zeroLogger struct {
 	zeroLogger zerolog.Logger
 }
 
-func New(debug bool) *zeroLogger {
-	Logger = &zeroLogger{zerolog.New(os.Stdout).With().CallerWithSkipFrameCount(3).Timestamp().Logger()}
+func newLogger(debug bool) {
+	logger = &zeroLogger{zerolog.New(os.Stdout).With().CallerWithSkipFrameCount(3).Timestamp().Logger()}
 	if debug {
-		Logger.SetLevel(int8(zerolog.DebugLevel))
+		logger.SetLevel(int8(zerolog.DebugLevel))
 	} else {
-		Logger.SetLevel(int8(zerolog.Disabled))
+		logger.SetLevel(int8(zerolog.Disabled))
 	}
-	Logger.setOutput(zerolog.ConsoleWriter{
+	logger.setOutput(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: time.RFC3339Nano,
 		FormatLevel: func(i interface{}) string {
@@ -66,7 +66,6 @@ func New(debug bool) *zeroLogger {
 			return colorize(lv, colorBlue)
 		},
 	})
-	return Logger
 }
 
 // withPrefix set a tag to zeroLogger
