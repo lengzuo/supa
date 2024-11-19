@@ -184,7 +184,7 @@ func (i Auth) SignOut(ctx context.Context, token string) error {
 	reqURL := fmt.Sprintf("%s/logout?scope=global", i.authHost)
 	httpResp, err := i.httpClient.Call(ctx, reqURL, http.MethodPost, nil, func(req *http.Request) {
 		req.Header.Set(authorizationHeader, i.apiKey)
-		req.Header.Set(authPrefix, token)
+		req.Header.Set(HeaderAuthorization.String(), fmt.Sprintf("%s %s", authPrefix, token))
 	})
 	if err != nil {
 		logger.Error("failed in sign out httpclient call with err: %s", err)
