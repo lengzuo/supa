@@ -52,15 +52,21 @@ func (b FilterBuilder) Execute(ctx context.Context) (*Response, error) {
 	if b.err != nil {
 		return nil, b.err
 	}
+	if b.c == nil {
+		return nil, errNoClient
+	}
 	if ctx == nil {
 		return nil, errors.New("postgrest: nil context")
 	}
 	h := b.finalHeader()
-	query := url.Values{}
-	for _, p := range b.query {
-		query.Add(p.key, p.value)
+	// The query string is built here rather than passed as url.Values,
+	// whose Encode sorts keys: parameters are sent in the order the
+	// builder added them, like postgrest-js's URLSearchParams.
+	path := b.path
+	if rq := encodeParams(b.query); rq != "" {
+		path += "?" + rq
 	}
-	req := &transport.Request{Method: b.method, Path: b.path, Query: query, Header: h}
+	req := &transport.Request{Method: b.method, Path: path, Header: h}
 	if b.body != nil {
 		req.Body = b.body
 	}
@@ -70,10 +76,25 @@ func (b FilterBuilder) Execute(ctx context.Context) (*Response, error) {
 	}
 	resp, err := b.c.send(ctx, req, retry)
 	if err != nil {
-		return nil, b.c.networkError(err, b.c.hintURL(b.path, query))
+		return nil, b.c.networkError(err, b.c.hintURL(path))
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return b.process(resp, h)
+	return b.process(resp, h, path)
+}
+
+// encodeParams renders ps as a query string in order. Keys and values are
+// escaped with url.QueryEscape, as url.Values.Encode does.
+func encodeParams(ps []param) string {
+	var sb strings.Builder
+	for i, p := range ps {
+		if i > 0 {
+			sb.WriteByte('&')
+		}
+		sb.WriteString(url.QueryEscape(p.key))
+		sb.WriteByte('=')
+		sb.WriteString(url.QueryEscape(p.value))
+	}
+	return sb.String()
 }
 
 // finalHeader applies the request-time header rules of postgrest-js
@@ -117,14 +138,14 @@ func statusText(resp *http.Response) string {
 
 // process converts an HTTP response into a Response or *Error, mirroring
 // postgrest-js PostgrestBuilder.processResponse.
-func (b FilterBuilder) process(resp *http.Response, h http.Header) (*Response, error) {
+func (b FilterBuilder) process(resp *http.Response, h http.Header, path string) (*Response, error) {
 	out := &Response{Status: resp.StatusCode, StatusText: statusText(resp), Header: resp.Header}
 	accept := h.Get("Accept")
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, &Error{Message: "read response: " + err.Error(), Status: resp.StatusCode, cause: err}
+			return nil, b.c.readError(err, resp.StatusCode, path)
 		}
 		if e, ok := errorFromBody(body, resp.StatusCode); ok {
 			return nil, e
@@ -150,7 +171,7 @@ func (b FilterBuilder) process(resp *http.Response, h http.Header) (*Response, e
 	if b.method != http.MethodHead {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, &Error{Message: "read response: " + err.Error(), Status: resp.StatusCode, cause: err}
+			return nil, b.c.readError(err, resp.StatusCode, path)
 		}
 		switch {
 		case len(body) == 0:
@@ -203,15 +224,34 @@ func (c *Client) networkError(err error, fullURL string) error {
 		return err
 	}
 	e := &Error{Message: err.Error(), cause: err}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		e.Hint = "Request was aborted (timeout or manual cancellation)"
-		if n := len(fullURL); n > c.urlLimit {
-			e.Hint += fmt.Sprintf(". Note: Your request URL is %d characters, which may exceed server limits. "+
-				"If selecting many fields, consider using views. If filtering with large arrays "+
-				"(e.g., In(\"id\", manyIDs)), consider using an RPC function to pass values server-side.", n)
-		}
-	}
+	e.Hint = c.abortHint(err, fullURL)
 	return e
+}
+
+// readError wraps a failure to read a response body. A Config.Timeout or
+// context expiring mid-body gets the same hint as an aborted request.
+func (c *Client) readError(err error, status int, path string) *Error {
+	return &Error{
+		Message: "read response: " + err.Error(),
+		Status:  status,
+		Hint:    c.abortHint(err, c.hintURL(path)),
+		cause:   err,
+	}
+}
+
+// abortHint returns postgrest-js's hint for aborted requests (with its
+// URL-length note), or "" when err is not a cancellation or timeout.
+func (c *Client) abortHint(err error, fullURL string) string {
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return ""
+	}
+	hint := "Request was aborted (timeout or manual cancellation)"
+	if n := len(fullURL); n > c.urlLimit {
+		hint += fmt.Sprintf(". Note: Your request URL is %d characters, which may exceed server limits. "+
+			"If selecting many fields, consider using views. If filtering with large arrays "+
+			"(e.g., In(\"id\", manyIDs)), consider using an RPC function to pass values server-side.", n)
+	}
+	return hint
 }
 
 // ExecuteInto runs the query and decodes Response.Data into dest, which
@@ -285,7 +325,9 @@ type OpenAPISpec struct {
 
 // GetOpenAPISpec fetches the OpenAPI description of the client's schema
 // (GET <URL>/ with Accept: application/openapi+json). The server must
-// have the OpenAPI output enabled for the role in use.
+// have the OpenAPI output enabled for the role in use. When a successful
+// response is valid JSON that does not fit the typed fields, the spec is
+// still returned with only Raw populated.
 func (c *Client) GetOpenAPISpec(ctx context.Context) (*OpenAPISpec, error) {
 	if ctx == nil {
 		return nil, errors.New("postgrest: nil context")
@@ -298,19 +340,22 @@ func (c *Client) GetOpenAPISpec(ctx context.Context) (*OpenAPISpec, error) {
 	req := &transport.Request{Method: http.MethodGet, Path: "/", Header: h}
 	resp, err := c.send(ctx, req, !c.retry.Disabled)
 	if err != nil {
-		return nil, c.networkError(err, c.hintURL("/", nil))
+		return nil, c.networkError(err, c.hintURL("/"))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &Error{Message: "read response: " + err.Error(), Status: resp.StatusCode, cause: err}
+		return nil, c.readError(err, resp.StatusCode, "/")
 	}
-	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 && json.Valid(body) {
 		var spec OpenAPISpec
-		if json.Unmarshal(body, &spec) == nil {
-			spec.Raw = body
-			return &spec, nil
+		if json.Unmarshal(body, &spec) != nil {
+			// Valid JSON that does not fit the typed fields (e.g. a
+			// non-object "info"): return the document in Raw only.
+			spec = OpenAPISpec{}
 		}
+		spec.Raw = body
+		return &spec, nil
 	}
 	if e, ok := errorFromBody(body, resp.StatusCode); ok {
 		return nil, e
@@ -325,8 +370,8 @@ func (c *Client) GetOpenAPISpec(ctx context.Context) (*OpenAPISpec, error) {
 // hintURL returns the request URL for error hints (e.g. the URL-length
 // hint). A malformed query already failed before sending, so an error here
 // only yields an empty string.
-func (c *Client) hintURL(path string, query url.Values) string {
-	u, err := c.t.URL(path, query)
+func (c *Client) hintURL(path string) string {
+	u, err := c.t.URL(path, nil)
 	if err != nil {
 		return ""
 	}

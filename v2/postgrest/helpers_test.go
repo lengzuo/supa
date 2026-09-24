@@ -15,11 +15,12 @@ const testKey = "test-anon-key"
 
 // recorded is one request seen by the fake server.
 type recorded struct {
-	Method string
-	Path   string
-	Query  url.Values
-	Header http.Header
-	Body   string
+	Method   string
+	Path     string
+	Query    url.Values
+	RawQuery string
+	Header   http.Header
+	Body     string
 }
 
 // fakeServer records requests and replies with handler.
@@ -52,7 +53,7 @@ func newFake(t *testing.T, handler http.HandlerFunc, mutate ...func(*Config)) (*
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
-		f.reqs = append(f.reqs, recorded{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), Header: r.Header.Clone(), Body: string(body)})
+		f.reqs = append(f.reqs, recorded{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), RawQuery: r.URL.RawQuery, Header: r.Header.Clone(), Body: string(body)})
 		f.mu.Unlock()
 		if handler != nil {
 			handler(w, r)

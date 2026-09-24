@@ -1,7 +1,6 @@
 package postgrest
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -115,7 +114,8 @@ func (q QueryBuilder) Select(columns string, opts ...SelectOptions) FilterBuilde
 }
 
 // Insert inserts one row (a struct or map) or many rows (a slice). The
-// values are JSON-encoded immediately. By default no rows are returned;
+// values are JSON-encoded immediately; a []byte or json.RawMessage is
+// sent as raw JSON text and must be valid JSON. By default no rows are returned;
 // chain Select to return the inserted rows. At most one InsertOptions is
 // used (the last).
 func (q QueryBuilder) Insert(values any, opts ...InsertOptions) FilterBuilder {
@@ -132,7 +132,8 @@ func (q QueryBuilder) Insert(values any, opts ...InsertOptions) FilterBuilder {
 
 // Upsert inserts rows, or merges them into existing rows that conflict on
 // the primary key (or OnConflict columns). The values are JSON-encoded
-// immediately. Chain Select to return the affected rows. At most one
+// immediately; a []byte or json.RawMessage is sent as raw JSON text and
+// must be valid JSON. Chain Select to return the affected rows. At most one
 // UpsertOptions is used (the last).
 func (q QueryBuilder) Upsert(values any, opts ...UpsertOptions) FilterBuilder {
 	o := lastOpt(opts)
@@ -155,8 +156,9 @@ func (q QueryBuilder) Upsert(values any, opts ...UpsertOptions) FilterBuilder {
 }
 
 // Update sets columns on the rows matched by the filters chained after it.
-// values (a struct or map) is JSON-encoded immediately. Always add a
-// filter: without one every row in the table is updated. At most one
+// values (a struct or map) is JSON-encoded immediately; a []byte or
+// json.RawMessage is sent as raw JSON text and must be valid JSON. Always
+// add a filter: without one every row in the table is updated. At most one
 // UpdateOptions is used (the last).
 func (q QueryBuilder) Update(values any, opts ...UpdateOptions) FilterBuilder {
 	o := lastOpt(opts)
@@ -164,7 +166,7 @@ func (q QueryBuilder) Update(values any, opts ...UpdateOptions) FilterBuilder {
 	if o.Count != "" {
 		b.header.Add(headerPrefer, "count="+string(o.Count))
 	}
-	body, err := json.Marshal(values)
+	body, err := encodeJSONBody(values)
 	if err != nil {
 		b.setErr(fmt.Errorf("postgrest: encode update values: %w", err))
 		return b
@@ -188,7 +190,7 @@ func (q QueryBuilder) Delete(opts ...DeleteOptions) FilterBuilder {
 // withRowsBody encodes insert/upsert values and, for bulk inserts, sets
 // the columns parameter listing every key present in any row.
 func (b FilterBuilder) withRowsBody(values any) FilterBuilder {
-	body, err := json.Marshal(values)
+	body, err := encodeJSONBody(values)
 	if err != nil {
 		b.setErr(fmt.Errorf("postgrest: encode rows: %w", err))
 		return b
@@ -216,10 +218,14 @@ type RPCOptions struct {
 }
 
 // RPC calls the Postgres function fn with args (a struct or map encoded as
-// a JSON object; nil means no arguments). The returned FilterBuilder
+// a JSON object; nil means no arguments). A []byte or json.RawMessage is
+// used as raw JSON text and must be valid JSON. The returned FilterBuilder
 // supports filters and modifiers on set-returning functions. At most one
 // RPCOptions is used (the last).
 func (c *Client) RPC(fn string, args any, opts ...RPCOptions) FilterBuilder {
+	if c == nil {
+		return FilterBuilder{err: errNoClient}
+	}
 	o := lastOpt(opts)
 	b := FilterBuilder{c: c, path: "/rpc/" + url.PathEscape(fn), header: c.headers.Clone(), isRPC: true}
 	if fn == "" {
@@ -227,7 +233,7 @@ func (c *Client) RPC(fn string, args any, opts ...RPCOptions) FilterBuilder {
 	}
 	body := []byte("{}")
 	if args != nil {
-		enc, err := json.Marshal(args)
+		enc, err := encodeJSONBody(args)
 		if err != nil {
 			b.setErr(fmt.Errorf("postgrest: encode rpc args: %w", err))
 			return b

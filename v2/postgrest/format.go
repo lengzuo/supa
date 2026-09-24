@@ -2,6 +2,8 @@ package postgrest
 
 import (
 	"bytes"
+	"database/sql/driver"
+	"encoding"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -11,71 +13,101 @@ import (
 	"unicode"
 )
 
+// maxFormatDepth bounds the recursion of formatValue through pointers,
+// interfaces and driver.Valuer results, so a pathological Valuer that
+// returns itself cannot recurse forever.
+const maxFormatDepth = 32
+
 // formatValue renders a filter value the way postgrest-js stringifies it
-// (`${value}`): nil is "null", strings are used verbatim, numbers and
-// booleans use their literal form, slices are comma-joined. time.Time is
-// formatted as RFC 3339, and maps/structs as JSON (JavaScript would print
-// "[object Object]", which is never useful).
+// (`${value}`). See formatScalar for the rules.
 func formatValue(v any) (string, error) {
-	switch x := v.(type) {
-	case nil:
-		return "null", nil
-	case string:
-		return x, nil
-	case bool:
-		return strconv.FormatBool(x), nil
-	case json.Number:
-		return x.String(), nil
-	case json.RawMessage:
-		return string(x), nil
-	case []byte:
-		return string(x), nil
-	case time.Time:
-		return x.Format(time.RFC3339Nano), nil
-	case float64:
-		return formatFloat(x, 64), nil
-	case float32:
-		return formatFloat(float64(x), 32), nil
-	case fmt.Stringer:
-		rv := reflect.ValueOf(v)
-		if rv.Kind() == reflect.Pointer && rv.IsNil() {
-			return "null", nil
-		}
-		return x.String(), nil
+	s, _, err := formatScalar(v, 0)
+	return s, err
+}
+
+// formatScalar renders v as filter text. null reports that v is SQL NULL
+// (a nil value, a nil pointer or a driver.Valuer returning nil), which is
+// rendered as the bare word null.
+//
+// The rules, in order:
+//
+//  1. nil, nil pointers and nil interfaces are null.
+//  2. json.RawMessage and []byte are used verbatim; time.Time is RFC 3339.
+//  3. encoding.TextMarshaler, then driver.Valuer (e.g. sql.NullString,
+//     uuid types), use the text or database value they produce.
+//  4. Basic kinds use their literal form, even when the type has a
+//     String method: a stringer-style int enum is sent as its number,
+//     which is what the database column holds.
+//  5. Other pointers are dereferenced.
+//  6. fmt.Stringer is used for the remaining (non-basic) kinds.
+//  7. Slices and arrays are comma-joined.
+//  8. Anything else (maps, structs) is JSON; JavaScript would print
+//     "[object Object]", which is never useful.
+func formatScalar(v any, depth int) (s string, null bool, err error) {
+	if depth > maxFormatDepth {
+		return "", false, fmt.Errorf("postgrest: cannot format filter value of type %T: nested too deeply", v)
+	}
+	if v == nil {
+		return "null", true, nil
 	}
 	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Pointer, reflect.Interface:
-		if rv.IsNil() {
-			return "null", nil
+	if (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && rv.IsNil() {
+		return "null", true, nil
+	}
+	switch x := v.(type) {
+	case json.RawMessage:
+		return string(x), false, nil
+	case []byte:
+		return string(x), false, nil
+	case time.Time:
+		return x.Format(time.RFC3339Nano), false, nil
+	case encoding.TextMarshaler:
+		b, err := x.MarshalText()
+		if err != nil {
+			return "", false, fmt.Errorf("postgrest: cannot format filter value of type %T: %w", v, err)
 		}
-		return formatValue(rv.Elem().Interface())
+		return string(b), false, nil
+	case driver.Valuer:
+		dv, err := x.Value()
+		if err != nil {
+			return "", false, fmt.Errorf("postgrest: cannot format filter value of type %T: %w", v, err)
+		}
+		return formatScalar(dv, depth+1)
+	}
+	switch rv.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return strconv.FormatInt(rv.Int(), 10), nil
+		return strconv.FormatInt(rv.Int(), 10), false, nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return strconv.FormatUint(rv.Uint(), 10), nil
+		return strconv.FormatUint(rv.Uint(), 10), false, nil
 	case reflect.Float32, reflect.Float64:
-		return formatFloat(rv.Float(), 64), nil
+		return formatFloat(rv.Float(), rv.Type().Bits()), false, nil
 	case reflect.Bool:
-		return strconv.FormatBool(rv.Bool()), nil
+		return strconv.FormatBool(rv.Bool()), false, nil
 	case reflect.String:
-		return rv.String(), nil
+		return rv.String(), false, nil
+	case reflect.Pointer, reflect.Interface:
+		return formatScalar(rv.Elem().Interface(), depth+1)
+	}
+	if x, ok := v.(fmt.Stringer); ok {
+		return x.String(), false, nil
+	}
+	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:
 		parts := make([]string, rv.Len())
 		for i := range parts {
-			s, err := formatValue(rv.Index(i).Interface())
+			s, _, err := formatScalar(rv.Index(i).Interface(), depth+1)
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			parts[i] = s
 		}
-		return strings.Join(parts, ","), nil
+		return strings.Join(parts, ","), false, nil
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
-			return "", fmt.Errorf("postgrest: cannot format filter value: %w", err)
+			return "", false, fmt.Errorf("postgrest: cannot format filter value: %w", err)
 		}
-		return string(b), nil
+		return string(b), false, nil
 	}
 }
 
@@ -110,12 +142,13 @@ func listElements(v any) (elems []any, ok bool) {
 // reservedListChars are the characters that force quoting inside a
 // PostgREST list such as in.(...). postgrest-js quotes values containing
 // , ( or ); this package also quotes values containing " or \ and escapes
-// those two characters, so any string round-trips safely.
+// those two characters, so any value round-trips safely.
 const reservedListChars = `,()"\`
 
-// quoteListValue quotes s for use inside in.(...) when needed.
+// quoteListValue quotes s for use inside in.(...) when needed. The word
+// null (any case) is quoted too, so that it is always literal text.
 func quoteListValue(s string) string {
-	if !strings.ContainsAny(s, reservedListChars) {
+	if !strings.ContainsAny(s, reservedListChars) && !strings.EqualFold(s, "null") {
 		return s
 	}
 	return `"` + escapeQuoted(s) + `"`
@@ -127,8 +160,8 @@ func escapeQuoted(s string) string {
 }
 
 // formatInList renders values for in.(...) / not.in.(...): duplicates are
-// removed (keeping the first occurrence) and strings containing reserved
-// characters are quoted.
+// removed (keeping the first occurrence) and every non-NULL value whose
+// text contains reserved characters is quoted, whatever its Go type.
 func formatInList(values any) (string, error) {
 	elems, ok := listElements(values)
 	if !ok {
@@ -137,11 +170,11 @@ func formatInList(values any) (string, error) {
 	seen := make(map[string]bool, len(elems))
 	parts := make([]string, 0, len(elems))
 	for _, e := range elems {
-		s, err := formatValue(e)
+		s, null, err := formatScalar(e, 0)
 		if err != nil {
 			return "", err
 		}
-		if isStringValue(e) {
+		if !null {
 			s = quoteListValue(s)
 		}
 		if seen[s] {
@@ -153,29 +186,20 @@ func formatInList(values any) (string, error) {
 	return strings.Join(parts, ","), nil
 }
 
-func isStringValue(v any) bool {
-	rv := reflect.ValueOf(v)
-	for rv.IsValid() && (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) {
-		if rv.IsNil() {
-			return false
-		}
-		rv = rv.Elem()
-	}
-	return rv.IsValid() && rv.Kind() == reflect.String
-}
-
 // formatArrayLiteral renders elems as a Postgres array literal {a,b}.
-// Elements that would change the literal's meaning (separators, braces,
-// quotes, backslashes, whitespace, empty strings or the word NULL) are
-// double-quoted; postgrest-js joins them verbatim.
+// Elements whose text would change the literal's meaning (separators,
+// braces, quotes, backslashes, whitespace, empty strings or the word
+// NULL) are double-quoted, whatever their Go type; postgrest-js joins
+// them verbatim. NULL elements and json.RawMessage elements are written
+// as-is.
 func formatArrayLiteral(elems []any) (string, error) {
 	parts := make([]string, len(elems))
 	for i, e := range elems {
-		s, err := formatValue(e)
+		s, null, err := formatScalar(e, 0)
 		if err != nil {
 			return "", err
 		}
-		if isStringValue(e) && needsArrayQuote(s) {
+		if _, raw := e.(json.RawMessage); !null && !raw && needsArrayQuote(s) {
 			s = `"` + escapeQuoted(s) + `"`
 		}
 		parts[i] = s
@@ -193,6 +217,35 @@ func needsArrayQuote(s string) bool {
 		}
 	}
 	return false
+}
+
+// rawJSONBody returns a compacted copy of v when it is a []byte or
+// json.RawMessage holding JSON text; ok is false for any other type.
+// Without this, encoding/json would base64-encode a []byte.
+func rawJSONBody(v any) (body []byte, ok bool, err error) {
+	var raw []byte
+	switch x := v.(type) {
+	case json.RawMessage:
+		raw = x
+	case []byte:
+		raw = x
+	default:
+		return nil, false, nil
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return nil, true, fmt.Errorf("postgrest: raw JSON body is not valid JSON: %w", err)
+	}
+	return buf.Bytes(), true, nil
+}
+
+// encodeJSONBody JSON-encodes v, passing []byte and json.RawMessage
+// through as raw JSON text.
+func encodeJSONBody(v any) ([]byte, error) {
+	if body, ok, err := rawJSONBody(v); ok {
+		return body, err
+	}
+	return json.Marshal(v)
 }
 
 // formatContainment renders the value of cs/cd/ov filters: strings are

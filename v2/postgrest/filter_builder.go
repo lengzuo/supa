@@ -18,7 +18,16 @@ import (
 //	recent := active.Order("created_at", postgrest.OrderOptions{Descending: true})
 //
 // Invalid input (for example an un-encodable value) does not panic; the
-// error is recorded and returned by Execute.
+// error is recorded and returned by Execute. The zero FilterBuilder is not
+// usable: its Execute returns an error.
+//
+// Filter values of type any are rendered as text: nil and nil pointers
+// are null; an encoding.TextMarshaler or driver.Valuer (such as
+// sql.NullString) uses its text or database value; numbers, booleans and
+// strings use their literal form, even when the type has a String method
+// (so a stringer-style int enum is sent as its number); time.Time is RFC
+// 3339; other fmt.Stringer values use String; slices are comma-joined;
+// maps and structs are JSON.
 type FilterBuilder struct {
 	c      *Client
 	method string
@@ -34,7 +43,8 @@ type FilterBuilder struct {
 	err         error
 }
 
-// param is one query-string parameter; order is preserved.
+// param is one query-string parameter. FilterBuilder.query keeps params in
+// the order they were added, and Execute sends them in that order.
 type param struct{ key, value string }
 
 // appendParam returns a copy of ps with (key, value) appended, like
@@ -207,8 +217,14 @@ func (b FilterBuilder) IsDistinct(column string, value any) FilterBuilder {
 }
 
 // In matches rows where column is one of values, which must be a slice or
-// array (for example []int or []string). Duplicates are removed and string
-// values containing reserved characters are quoted.
+// array (for example []int or []string). Duplicates are removed, and any
+// value whose text contains , ( ) " or \ is double-quoted and escaped,
+// whatever its Go type.
+//
+// Inside In, NotIn and the array forms of Contains, ContainedBy and
+// Overlaps, the string "null" is literal text; pass nil (or a nil pointer)
+// for SQL NULL. Values are never un-quoted: the string `"a,b"` (with the
+// quotes) matches that exact text, quotes included.
 func (b FilterBuilder) In(column string, values any) FilterBuilder {
 	list, err := formatInList(values)
 	if err != nil {

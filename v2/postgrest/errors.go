@@ -2,6 +2,7 @@ package postgrest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -56,6 +57,10 @@ func (e *Error) Error() string {
 // Unwrap returns the underlying transport error for network failures
 // (for example context.Canceled or context.DeadlineExceeded), or nil.
 func (e *Error) Unwrap() error { return e.cause }
+
+// errNoClient is returned by Execute on a query that was not created by a
+// Client, such as the zero FilterBuilder.
+var errNoClient = errors.New("postgrest: query has no client; create queries with Client.From or Client.RPC")
 
 // errorFromBody builds an Error from a PostgREST error body. ok is false
 // when body is not a JSON object.

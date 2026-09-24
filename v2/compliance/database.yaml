@@ -2,12 +2,12 @@ features:
   database.configuration.auto_retry:
     status: implemented
     symbols: [postgrest.Config, postgrest.RetryPolicy, postgrest.FilterBuilder.Retry]
-    tests: [TestRetry, TestRetryPolicyDelay]
+    tests: [TestRetry, TestRetryPolicyDelay, TestRetryPolicyDelayOverflow, TestParseRetryAfter, TestRetryCancelledDuringBackoff, TestSleepCtx]
     reason: ""
   database.configuration.request_timeout:
     status: implemented
     symbols: [postgrest.Config]
-    tests: [TestRequestTimeout]
+    tests: [TestRequestTimeout, TestTimeoutWhileReadingBody]
     reason: ""
   database.mutate.delete:
     status: implemented
@@ -17,7 +17,7 @@ features:
   database.mutate.insert:
     status: implemented
     symbols: [postgrest.QueryBuilder.Insert, postgrest.InsertOptions]
-    tests: [TestInsert, TestInsertBulk]
+    tests: [TestInsert, TestInsertBulk, TestRawJSONBodies]
     reason: ""
   database.mutate.select_after_mutation:
     status: implemented
@@ -27,27 +27,27 @@ features:
   database.mutate.update:
     status: implemented
     symbols: [postgrest.QueryBuilder.Update, postgrest.UpdateOptions]
-    tests: [TestUpdate]
+    tests: [TestUpdate, TestRawJSONBodies]
     reason: ""
   database.mutate.upsert:
     status: implemented
     symbols: [postgrest.QueryBuilder.Upsert, postgrest.UpsertOptions]
-    tests: [TestUpsert]
+    tests: [TestUpsert, TestRawJSONBodies]
     reason: ""
   database.query.from_table:
     status: implemented
     symbols: [postgrest.New, postgrest.Client.From]
-    tests: [TestFromSelect, TestNewValidation]
+    tests: [TestFromSelect, TestNewValidation, TestZeroValueBuilders]
     reason: ""
   database.query.openapi_spec:
     status: implemented
     symbols: [postgrest.Client.GetOpenAPISpec, postgrest.OpenAPISpec]
-    tests: [TestGetOpenAPISpec, TestGetOpenAPISpecErrors]
+    tests: [TestGetOpenAPISpec, TestGetOpenAPISpecErrors, TestGetOpenAPISpecUntypedDocument]
     reason: ""
   database.query.rpc:
     status: implemented
     symbols: [postgrest.Client.RPC, postgrest.RPCOptions]
-    tests: [TestRPC, TestRPCGetHead]
+    tests: [TestRPC, TestRPCGetHead, TestRawJSONBodies, TestIsJSONObjectish]
     reason: ""
   database.query.schema_selection:
     status: implemented
@@ -57,7 +57,7 @@ features:
   database.query.select:
     status: implemented
     symbols: [postgrest.QueryBuilder.Select, postgrest.SelectOptions, postgrest.FilterBuilder.Select, postgrest.FilterBuilder.Execute, postgrest.FilterBuilder.ExecuteInto, postgrest.ExecuteTo]
-    tests: [TestFromSelect, TestSelectHeadCount, TestSelectCountRange, TestExecuteTo]
+    tests: [TestFromSelect, TestSelectHeadCount, TestSelectCountRange, TestExecuteTo, TestQueryParamOrder]
     reason: ""
   database.using_filters.contained_by:
     status: implemented
@@ -67,12 +67,12 @@ features:
   database.using_filters.contains:
     status: implemented
     symbols: [postgrest.FilterBuilder.Contains]
-    tests: [TestFilters, TestFilterErrors]
+    tests: [TestFilters, TestFilterErrors, TestArrayLiteralQuotingByFormattedText]
     reason: ""
   database.using_filters.eq:
     status: implemented
     symbols: [postgrest.FilterBuilder.Eq]
-    tests: [TestFilters]
+    tests: [TestFilters, TestFilterValueKindsOnWire, TestFormatValue, TestFormatValueErrors]
     reason: ""
   database.using_filters.gt:
     status: implemented
@@ -102,7 +102,7 @@ features:
   database.using_filters.in:
     status: implemented
     symbols: [postgrest.FilterBuilder.In]
-    tests: [TestFilters, TestFilterErrors]
+    tests: [TestFilters, TestFilterErrors, TestInQuotingByFormattedText]
     reason: ""
   database.using_filters.is:
     status: implemented
@@ -157,7 +157,7 @@ features:
   database.using_filters.not_in:
     status: implemented
     symbols: [postgrest.FilterBuilder.NotIn]
-    tests: [TestFilters, TestFilterErrors]
+    tests: [TestFilters, TestFilterErrors, TestInQuotingByFormattedText]
     reason: ""
   database.using_filters.or:
     status: implemented
