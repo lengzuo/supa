@@ -9,6 +9,24 @@
 // same way as supabase-js; server applications that handle many users
 // usually call the token-taking methods (GetUser, UpdateUser, ...) with the
 // caller's JWT instead and never store a session.
+//
+// # Token-taking methods
+//
+// Every method that acts on behalf of a signed-in user takes an
+// accessToken argument right after ctx (GetUser, UpdateUser,
+// Reauthenticate, SignOut, GetUserIdentities, LinkIdentity,
+// LinkIdentityWithIDToken, UnlinkIdentity and the PasskeyAPI calls that
+// need a user):
+//
+//   - accessToken != "": the call is made with that JWT. The stored session
+//     is neither read nor modified and no events are emitted. This is the
+//     form for servers that handle many users without storing sessions.
+//   - accessToken == "": the stored session is used (refreshed first when
+//     it is within ExpiryMargin of expiring, see GetSession); results are
+//     written back to it and listeners are notified, like supabase-js.
+//     ErrSessionMissing is returned when there is no stored session.
+//
+// GetClaims (jwt) and RefreshSession (refreshToken) follow the same rule.
 package auth
 
 import (
@@ -19,6 +37,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lengzuo/supa/v2/internal/transport"
@@ -63,11 +82,23 @@ type Config struct {
 	// StorageKey is the key under which the session is stored. Defaults to
 	// "sb-<project-ref>-auth-token".
 	StorageKey string
-	// FlowType defaults to FlowImplicit.
+	// FlowType defaults to FlowImplicit. With FlowPKCE, flows that end in a
+	// redirect (SignUp and SignInWithOTP by email, SignInWithOAuth,
+	// SignInWithSSO, ResetPasswordForEmail, Resend, LinkIdentity and email
+	// changes via UpdateUser) store a code verifier in Storage and the
+	// redirect carries a code for ExchangeCodeForSession.
 	FlowType FlowType
-	// AutoRefreshToken, when true, lets StartAutoRefresh keep the stored
-	// session fresh in the background.
+	// AutoRefreshToken, when true, makes New start the background refresher
+	// (see StartAutoRefresh) for the lifetime of the Client. Call
+	// StopAutoRefresh when the Client is no longer needed so the goroutine
+	// exits. Servers that create a Client per request should leave this off.
 	AutoRefreshToken bool
+	// AppendPKCEFlowIDToRedirects, when true, appends the reserved
+	// "sb_flow_id" query parameter to redirect URLs of PKCE flows so that
+	// ExchangeCodeForSession / GetSessionFromURL can pick the verifier of
+	// that exact flow when several flows are pending at once. Mirrors the
+	// auth-js experimental.appendPkceFlowIdToRedirects flag.
+	AppendPKCEFlowIDToRedirects bool
 }
 
 // Client talks to Supabase Auth.
@@ -84,6 +115,32 @@ type Client struct {
 	listenersMu sync.RWMutex
 	listeners   map[uint64]func(AuthChangeEvent, *Session)
 	nextID      uint64
+
+	// removalEpoch is bumped by removeSession so an in-flight refresh can
+	// detect a concurrent sign-out that happened while it saved.
+	removalEpoch atomic.Uint64
+
+	// refreshMu guards refreshing and lastRefreshFailure.
+	refreshMu          sync.Mutex
+	refreshing         map[string]*refreshCall
+	lastRefreshFailure *refreshFailure
+	// refreshRetryBudget and refreshRetryBase bound the retries of a
+	// refresh that failed with a retryable error (replaceable in tests).
+	refreshRetryBudget time.Duration
+	refreshRetryBase   time.Duration
+
+	// pkceMu serializes read-modify-write cycles of the PKCE flow index.
+	pkceMu sync.Mutex
+
+	// autoMu guards the background refresher.
+	autoMu     sync.Mutex
+	autoCancel context.CancelFunc
+	autoDone   chan struct{}
+	// tickDuration is the auto-refresh tick (replaceable in tests).
+	tickDuration time.Duration
+
+	// customAuth records whether Config.Headers sets Authorization.
+	customAuth bool
 
 	// now is replaceable in tests.
 	now func() time.Time
@@ -127,12 +184,21 @@ func New(cfg Config) (*Client, error) {
 		storageKey: cfg.StorageKey,
 		listeners:  map[uint64]func(AuthChangeEvent, *Session){},
 		now:        time.Now,
+
+		refreshing:         map[string]*refreshCall{},
+		refreshRetryBudget: autoRefreshTickDuration,
+		refreshRetryBase:   200 * time.Millisecond,
+		tickDuration:       autoRefreshTickDuration,
+		customAuth:         headers.Get("Authorization") != "",
 	}
 	if c.storage == nil {
 		c.storage = NewMemoryStorage()
 	}
 	if c.storageKey == "" {
 		c.storageKey = defaultStorageKey(t.BaseURL())
+	}
+	if cfg.AutoRefreshToken {
+		c.StartAutoRefresh(context.Background())
 	}
 	return c, nil
 }

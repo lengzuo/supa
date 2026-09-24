@@ -112,6 +112,68 @@ type AMREntry struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// UnmarshalJSON accepts both the object form ({"method":..,"timestamp":..})
+// and the plain string form (RFC 8176) of an amr entry.
+func (a *AMREntry) UnmarshalJSON(data []byte) error {
+	var method string
+	if err := json.Unmarshal(data, &method); err == nil {
+		*a = AMREntry{Method: method}
+		return nil
+	}
+	type plain AMREntry
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*a = AMREntry(p)
+	return nil
+}
+
+// WeakPassword describes why a password was considered weak. It is
+// returned by SignInWithPassword when the server flags the password.
+type WeakPassword struct {
+	Reasons []string `json:"reasons"`
+	Message string   `json:"message"`
+}
+
+// AuthResponse is returned by calls that may create a session. Session is
+// nil when the flow does not sign the user in yet (e.g. SignUp with email
+// confirmation enabled).
+type AuthResponse struct {
+	User    *User
+	Session *Session
+	// WeakPassword is set by SignInWithPassword when the server reports
+	// that the password does not meet the current strength policy.
+	WeakPassword *WeakPassword
+	// RedirectType is the type of the redirect that produced the session
+	// (e.g. "recovery"), set by ExchangeCodeForSession and GetSessionFromURL.
+	RedirectType string
+}
+
+// OTPResponse is returned by calls that send a one-time password.
+type OTPResponse struct {
+	// MessageID is the SMS provider message id for phone OTPs, if any.
+	MessageID string
+}
+
+// OAuthResponse carries the URL the user must be sent to for a provider
+// sign-in or identity link.
+type OAuthResponse struct {
+	Provider string
+	URL      string
+	// FlowID identifies the PKCE verifier slot for this flow (FlowPKCE
+	// only). Pass it to ExchangeCodeForSession when several flows can be
+	// pending at once and the redirect does not carry sb_flow_id.
+	FlowID string
+}
+
+// SSOResponse carries the identity-provider URL for an SSO sign-in.
+type SSOResponse struct {
+	URL string
+	// FlowID identifies the PKCE verifier slot for this flow (FlowPKCE only).
+	FlowID string
+}
+
 // AuthChangeEvent is delivered to OnAuthStateChange listeners.
 type AuthChangeEvent string
 

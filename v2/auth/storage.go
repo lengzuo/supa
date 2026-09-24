@@ -84,11 +84,43 @@ func (c *Client) saveSession(ctx context.Context, s *Session) error {
 	return nil
 }
 
-// removeSession deletes the stored session and any PKCE verifier.
+// removeSession deletes the stored session and every pending PKCE
+// verifier. It does not notify listeners; see clearSession.
 func (c *Client) removeSession(ctx context.Context) error {
+	c.removalEpoch.Add(1)
+	c.refreshMu.Lock()
+	c.lastRefreshFailure = nil
+	c.refreshMu.Unlock()
 	if err := c.storage.RemoveItem(ctx, c.storageKey); err != nil {
 		return fmt.Errorf("auth: remove session: %w", err)
 	}
-	_ = c.storage.RemoveItem(ctx, c.storageKey+"-code-verifier")
+	c.removeAllPKCEVerifiers(ctx)
+	return nil
+}
+
+// commitSession stores s and then notifies listeners with event.
+func (c *Client) commitSession(ctx context.Context, s *Session, event AuthChangeEvent) error {
+	c.sessionMu.Lock()
+	err := c.saveSession(ctx, s)
+	c.sessionMu.Unlock()
+	if err != nil {
+		return err
+	}
+	c.refreshMu.Lock()
+	c.lastRefreshFailure = nil
+	c.refreshMu.Unlock()
+	c.notify(event, s)
+	return nil
+}
+
+// clearSession removes the stored session and notifies SIGNED_OUT.
+func (c *Client) clearSession(ctx context.Context) error {
+	c.sessionMu.Lock()
+	err := c.removeSession(ctx)
+	c.sessionMu.Unlock()
+	if err != nil {
+		return err
+	}
+	c.notify(EventSignedOut, nil)
 	return nil
 }
