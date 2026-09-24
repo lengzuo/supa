@@ -1,0 +1,62 @@
+name: v2
+
+on:
+  push:
+    branches: [master, main]
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+  pull_request:
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: v2
+
+jobs:
+  test:
+    name: test (Go ${{ matrix.go }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.23.x", "stable"]
+        os: [ubuntu-latest]
+        include:
+          - go: stable
+            os: macos-latest
+          - go: stable
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: v2/go.sum
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: go mod tidy
+        if: runner.os == 'Linux'
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: go test (race, includes the compliance gate)
+        run: go test -race -count=1 ./...
+      - name: concurrency stress
+        if: runner.os == 'Linux' && matrix.go == 'stable'
+        run: go test -race -count=5 -cpu 1,4 ./auth/ ./realtime/
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: v2/go.sum
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          working-directory: v2
