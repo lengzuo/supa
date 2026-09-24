@@ -9,9 +9,10 @@ import (
 
 // SessionStorage persists the current session and PKCE code verifiers.
 //
-// The Client calls SetItem and RemoveItem (and some GetItem calls) while it
-// holds its internal session lock, so implementations must be fast and
-// must not call back into the Client (that would deadlock).
+// The Client calls SetItem and RemoveItem (and most GetItem calls) while
+// it holds its session lock, so implementations must be fast and must not
+// call Client methods that operate on the stored session (that would
+// deadlock or fail with ErrLockAcquireTimeout).
 // Implementations must be safe for concurrent use. GetItem returns "" and
 // a nil error when the key is absent.
 type SessionStorage interface {
@@ -93,165 +94,12 @@ func (c *Client) saveSession(ctx context.Context, s *Session) error {
 }
 
 // removeSession deletes the stored session and every pending PKCE
-// verifier. It does not notify listeners; see clearSession.
+// verifier. It does not notify listeners (see signOutLocked).
 func (c *Client) removeSession(ctx context.Context) error {
-	c.removalEpoch.Add(1)
-	c.refreshMu.Lock()
-	c.lastRefreshFailure = nil
-	c.refreshMu.Unlock()
+	c.clearRefreshFailure()
 	if err := c.storage.RemoveItem(ctx, c.storageKey); err != nil {
 		return fmt.Errorf("auth: remove session: %w", err)
 	}
 	c.removeAllPKCEVerifiers(ctx)
 	return nil
-}
-
-// commitSession stores s and then notifies listeners with event.
-func (c *Client) commitSession(ctx context.Context, s *Session, event AuthChangeEvent) error {
-	c.sessionMu.Lock()
-	err := c.saveSession(ctx, s)
-	if err == nil {
-		c.enqueueEvent(event, s)
-	}
-	c.sessionMu.Unlock()
-	if err != nil {
-		return err
-	}
-	c.refreshMu.Lock()
-	c.lastRefreshFailure = nil
-	c.refreshMu.Unlock()
-	c.deliverEvents()
-	return nil
-}
-
-// clearSession removes the stored session and notifies SIGNED_OUT.
-func (c *Client) clearSession(ctx context.Context) error {
-	_, err := c.clearSessionIf(ctx, nil)
-	return err
-}
-
-// clearSessionIf removes the stored session and notifies SIGNED_OUT if
-// match (nil = always) accepts the session stored at that moment. The check
-// and the removal happen under sessionMu, so a session committed in the
-// meantime (e.g. a fresh sign-in) is never removed by a stale decision. It
-// reports whether a removal happened.
-func (c *Client) clearSessionIf(ctx context.Context, match func(stored *Session) bool) (bool, error) {
-	removed, err := c.removeSessionIf(ctx, match)
-	if removed {
-		c.deliverEvents()
-	}
-	return removed, err
-}
-
-// removeSessionIf is clearSessionIf without delivering the queued
-// SIGNED_OUT event; the caller must call deliverEvents.
-func (c *Client) removeSessionIf(ctx context.Context, match func(stored *Session) bool) (bool, error) {
-	c.sessionMu.Lock()
-	if match != nil {
-		stored, err := c.loadSession(ctx)
-		if err != nil || stored == nil || !match(stored) {
-			c.sessionMu.Unlock()
-			return false, err
-		}
-	}
-	err := c.removeSession(ctx)
-	if err == nil {
-		c.enqueueEvent(EventSignedOut, nil)
-	}
-	c.sessionMu.Unlock()
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// sessionBasis identifies the stored session a request was made with, so
-// its result is only written back if that session is still current.
-type sessionBasis struct {
-	accessToken  string
-	refreshToken string
-}
-
-func basisOf(s *Session) sessionBasis {
-	if s == nil {
-		return sessionBasis{}
-	}
-	return sessionBasis{accessToken: s.AccessToken, refreshToken: s.RefreshToken}
-}
-
-// matches reports whether stored is still the session b was taken from.
-func (b sessionBasis) matches(stored *Session) bool {
-	if stored == nil {
-		return false
-	}
-	return (b.refreshToken != "" && stored.RefreshToken == b.refreshToken) ||
-		(b.accessToken != "" && stored.AccessToken == b.accessToken)
-}
-
-// updateStoredUser writes user into the stored session after a user
-// update made with basis, then emits USER_UPDATED with the session actually
-// stored. It never resurrects a session removed in the meantime: when the
-// stored session is gone nothing is written. When the stored session was
-// replaced (e.g. refreshed while the request was in flight) the new user is
-// swapped in only if it belongs to the same user, keeping the stored
-// tokens. It returns the stored session, or nil when nothing was written.
-func (c *Client) updateStoredUser(ctx context.Context, basis sessionBasis, user *User) (*Session, error) {
-	c.sessionMu.Lock()
-	stored, err := c.loadSession(ctx)
-	if err != nil || stored == nil {
-		c.sessionMu.Unlock()
-		return nil, err
-	}
-	if !basis.matches(stored) && (stored.User == nil || user == nil || stored.User.ID != user.ID) {
-		c.sessionMu.Unlock()
-		return nil, nil
-	}
-	stored.User = user
-	err = c.saveSession(ctx, stored)
-	if err == nil {
-		c.enqueueEvent(EventUserUpdated, stored)
-	}
-	c.sessionMu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	c.deliverEvents()
-	return stored, nil
-}
-
-// replaceSessionIfCurrent stores next and emits event only if the stored
-// session is still the one identified by basis. A session removed or
-// replaced while the request was in flight is left alone (never
-// resurrected or overwritten with stale tokens). It reports whether next
-// was stored.
-func (c *Client) replaceSessionIfCurrent(ctx context.Context, basis sessionBasis, next *Session, event AuthChangeEvent) (bool, error) {
-	ok, err := c.replaceSessionIfCurrentQueued(ctx, basis, next, event)
-	if ok {
-		c.deliverEvents()
-	}
-	return ok, err
-}
-
-// replaceSessionIfCurrentQueued is replaceSessionIfCurrent without
-// delivering the queued event; the caller must call deliverEvents (after
-// releasing rotateMu, if held).
-func (c *Client) replaceSessionIfCurrentQueued(ctx context.Context, basis sessionBasis, next *Session, event AuthChangeEvent) (bool, error) {
-	c.sessionMu.Lock()
-	stored, err := c.loadSession(ctx)
-	if err != nil || !basis.matches(stored) {
-		c.sessionMu.Unlock()
-		return false, err
-	}
-	err = c.saveSession(ctx, next)
-	if err == nil {
-		c.enqueueEvent(event, next)
-	}
-	c.sessionMu.Unlock()
-	if err != nil {
-		return false, err
-	}
-	c.refreshMu.Lock()
-	c.lastRefreshFailure = nil
-	c.refreshMu.Unlock()
-	return true, nil
 }

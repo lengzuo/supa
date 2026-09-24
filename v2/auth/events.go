@@ -30,9 +30,9 @@ type queuedEvent struct {
 	session *Session
 }
 
-// enqueueEvent queues an event. Call it while holding sessionMu, right
+// enqueueEvent queues an event. Call it while holding the session lock, right
 // after the storage change, so the queue order is the commit order; call
-// deliverEvents after releasing sessionMu.
+// deliverEvents after releasing the lock.
 func (c *Client) enqueueEvent(event AuthChangeEvent, s *Session) {
 	c.evMu.Lock()
 	c.evQueue = append(c.evQueue, queuedEvent{event, s})

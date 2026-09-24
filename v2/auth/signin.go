@@ -66,15 +66,13 @@ func (c *Client) SignUp(ctx context.Context, params SignUpParams) (*AuthResponse
 	default:
 		return nil, fmt.Errorf("%w: you must provide either an email or phone number and a password", ErrInvalidArgument)
 	}
-	resp, err := c.postSession(ctx, "/signup", query, "", body)
-	if err != nil {
-		c.removePKCEVerifier(ctx, flowIDOf(flow))
-		return nil, err
-	}
-	if err := c.maybeCommit(ctx, resp, EventSignedIn); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return c.lockedSignIn(ctx, EventSignedIn, func() (*AuthResponse, error) {
+		resp, err := c.postSession(ctx, "/signup", query, "", body)
+		if err != nil {
+			c.removePKCEVerifier(ctx, flowIDOf(flow))
+		}
+		return resp, err
+	})
 }
 
 // SignInWithPasswordParams are the credentials for SignInWithPassword. Set
@@ -220,18 +218,13 @@ func (c *Client) VerifyOTP(ctx context.Context, params VerifyOTPParams) (*AuthRe
 		VerifyOTPParams
 		Meta gotrueMetaSecurity `json:"gotrue_meta_security"`
 	}{params, metaSecurity(params.CaptchaToken)}
-	resp, err := c.postSession(ctx, "/verify", redirectQuery(params.RedirectTo), "", body)
-	if err != nil {
-		return nil, err
-	}
 	event := EventSignedIn
 	if params.Type == OTPTypeRecovery {
 		event = EventPasswordRecovery
 	}
-	if err := c.maybeCommit(ctx, resp, event); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return c.lockedSignIn(ctx, event, func() (*AuthResponse, error) {
+		return c.postSession(ctx, "/verify", redirectQuery(params.RedirectTo), "", body)
+	})
 }
 
 // SignInAnonymouslyParams configure SignInAnonymously.
@@ -248,14 +241,9 @@ func (c *Client) SignInAnonymously(ctx context.Context, params SignInAnonymously
 		Data map[string]any     `json:"data"`
 		Meta gotrueMetaSecurity `json:"gotrue_meta_security"`
 	}{orEmptyMap(params.Data), metaSecurity(params.CaptchaToken)}
-	resp, err := c.postSession(ctx, "/signup", nil, "", body)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.maybeCommit(ctx, resp, EventSignedIn); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return c.lockedSignIn(ctx, EventSignedIn, func() (*AuthResponse, error) {
+		return c.postSession(ctx, "/signup", nil, "", body)
+	})
 }
 
 // SignInWithOAuthParams configure SignInWithOAuth and LinkIdentity.
@@ -431,43 +419,58 @@ func (c *Client) ExchangeCodeForSession(ctx context.Context, authCode string, op
 			return nil, ErrPKCEVerifierMissing
 		}
 	}
-	stored, err := c.retrievePKCEVerifier(ctx, flowID)
-	if err != nil {
-		return nil, fmt.Errorf("auth: load code verifier: %w", err)
-	}
 	noStore := opts != nil && opts.NoStore
-	verifier, redirectType, _ := strings.Cut(stored, "/")
-	if verifier == "" && c.cfg.FlowType == FlowPKCE {
-		c.removePKCEVerifier(ctx, flowID)
-		return nil, ErrPKCEVerifierMissing
-	}
-	if noStore {
-		// Do not keep the verifier in shared storage for the round trip.
-		c.removePKCEVerifier(ctx, flowID)
-	}
-	body := map[string]string{"auth_code": authCode, "code_verifier": verifier}
-	resp, err := c.postSession(ctx, "/token", url.Values{"grant_type": {"pkce"}}, "", body)
-	if !noStore {
-		c.removePKCEVerifier(ctx, flowID)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if resp.Session == nil || resp.User == nil {
-		return nil, ErrInvalidTokenResponse
-	}
-	resp.RedirectType = redirectType
-	if noStore {
+	exchange := func() (*AuthResponse, error) {
+		stored, err := c.retrievePKCEVerifier(ctx, flowID)
+		if err != nil {
+			return nil, fmt.Errorf("auth: load code verifier: %w", err)
+		}
+		verifier, redirectType, _ := strings.Cut(stored, "/")
+		if verifier == "" && c.cfg.FlowType == FlowPKCE {
+			c.removePKCEVerifier(ctx, flowID)
+			return nil, ErrPKCEVerifierMissing
+		}
+		if noStore {
+			// Do not keep the verifier in shared storage for the round trip.
+			c.removePKCEVerifier(ctx, flowID)
+		}
+		body := map[string]string{"auth_code": authCode, "code_verifier": verifier}
+		resp, err := c.postSession(ctx, "/token", url.Values{"grant_type": {"pkce"}}, "", body)
+		if !noStore {
+			c.removePKCEVerifier(ctx, flowID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if resp.Session == nil || resp.User == nil {
+			return nil, ErrInvalidTokenResponse
+		}
+		resp.RedirectType = redirectType
 		return resp, nil
 	}
-	event := EventSignedIn
-	if redirectType == OTPTypeRecovery {
-		event = EventPasswordRecovery
+	if noStore {
+		return exchange()
 	}
-	if err := c.commitSession(ctx, resp.Session, event); err != nil {
+	var out *AuthResponse
+	err := c.withSessionLock(ctx, func() error {
+		resp, err := exchange()
+		if err != nil {
+			return err
+		}
+		event := EventSignedIn
+		if resp.RedirectType == OTPTypeRecovery {
+			event = EventPasswordRecovery
+		}
+		if err := c.commitLocked(ctx, resp.Session, event); err != nil {
+			return err
+		}
+		out = resp
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+	return out, nil
 }
 
 // ResendParams configure Resend. Set Email for types "signup" and
@@ -568,26 +571,41 @@ func (c *Client) postSession(ctx context.Context, path string, query url.Values,
 	return c.decodeSessionResponse(raw)
 }
 
-// signInToken calls /token?grant_type=<grant>, requires a session and
-// user in the response, stores the session and emits event.
+// signInToken calls /token?grant_type=<grant> under the session lock,
+// requires a session and user in the response, stores the session and
+// emits event.
 func (c *Client) signInToken(ctx context.Context, grant, token string, body any, event AuthChangeEvent) (*AuthResponse, error) {
-	resp, err := c.postSession(ctx, "/token", url.Values{"grant_type": {grant}}, token, body)
+	return c.lockedSignIn(ctx, event, func() (*AuthResponse, error) {
+		resp, err := c.postSession(ctx, "/token", url.Values{"grant_type": {grant}}, token, body)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Session == nil || resp.User == nil {
+			return nil, ErrInvalidTokenResponse
+		}
+		return resp, nil
+	})
+}
+
+// lockedSignIn runs a sign-in request under the session lock and stores
+// the session it returns, if any, emitting event.
+func (c *Client) lockedSignIn(ctx context.Context, event AuthChangeEvent, do func() (*AuthResponse, error)) (*AuthResponse, error) {
+	var out *AuthResponse
+	err := c.withSessionLock(ctx, func() error {
+		resp, err := do()
+		if err != nil {
+			return err
+		}
+		if resp.Session != nil {
+			if err := c.commitLocked(ctx, resp.Session, event); err != nil {
+				return err
+			}
+		}
+		out = resp
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if resp.Session == nil || resp.User == nil {
-		return nil, ErrInvalidTokenResponse
-	}
-	if err := c.commitSession(ctx, resp.Session, event); err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
-
-// maybeCommit stores resp.Session, when present, and emits event.
-func (c *Client) maybeCommit(ctx context.Context, resp *AuthResponse, event AuthChangeEvent) error {
-	if resp.Session == nil {
-		return nil
-	}
-	return c.commitSession(ctx, resp.Session, event)
+	return out, nil
 }

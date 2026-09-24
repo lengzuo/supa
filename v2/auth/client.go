@@ -30,6 +30,17 @@
 // and so do ExchangeCodeForSession and GetSessionFromURL through their
 // NoStore option.
 //
+// # Concurrency
+//
+// Operations on the stored session are serialized by one session lock
+// held for their whole read -> network -> commit cycle, like auth-js (see
+// Config.LockAcquireTimeout and ErrLockAcquireTimeout). Token-rotating
+// requests (refresh, MFA verification) complete and are stored even if the
+// caller's ctx is cancelled. Explicit-token and NoStore calls never take
+// the lock. Events are delivered in commit order after the lock is
+// released, so listeners may call any Client method; SessionStorage
+// implementations must not.
+//
 // The MFA and OAuth server APIs, whose methods take parameter structs, use
 // a builder instead of an argument: Client.MFA().WithAccessToken(jwt) and
 // Client.OAuth().WithAccessToken(jwt) act for that JWT (stateless); without
@@ -45,7 +56,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/lengzuo/supa/v2/internal/transport"
@@ -107,6 +117,12 @@ type Config struct {
 	// that exact flow when several flows are pending at once. Mirrors the
 	// auth-js experimental.appendPkceFlowIdToRedirects flag.
 	AppendPKCEFlowIDToRedirects bool
+	// LockAcquireTimeout bounds how long an operation on the stored session
+	// waits for another one (e.g. a slow refresh) to finish before failing
+	// with ErrLockAcquireTimeout. Zero means DefaultLockAcquireTimeout;
+	// a negative value waits for as long as the caller's ctx allows.
+	// Explicit-token and NoStore calls never wait.
+	LockAcquireTimeout time.Duration
 }
 
 // Client talks to Supabase Auth.
@@ -116,36 +132,24 @@ type Client struct {
 	storage    SessionStorage
 	storageKey string
 
-	// rotateMu is held across every stored-session round trip after which
-	// the server rotates the session's refresh token (token refresh, MFA
-	// verification), from reading the stored token to committing the
-	// result, so two such round trips never use the same refresh token.
-	// Lock order: rotateMu -> sessionMu -> evMu. Events are never delivered
-	// while rotateMu is held, and nothing that may itself need rotateMu
-	// (e.g. GetSession, which can refresh) is called while holding it.
-	rotateMu sync.Mutex
-
-	// sessionMu serializes session read-modify-write cycles (refresh,
-	// sign-in, sign-out) so concurrent callers do not race.
-	sessionMu sync.Mutex
+	// sessionLock is the one-slot session lock held by every stored-session
+	// operation for its read -> network -> commit cycle (see lock.go).
+	// Lock order: sessionLock -> refreshMu / pkceMu / evMu (leaf locks).
+	sessionLock chan struct{}
+	lockTimeout time.Duration
 
 	listenersMu sync.RWMutex
 	listeners   map[uint64]func(AuthChangeEvent, *Session)
 	nextID      uint64
 
 	// evMu guards evQueue and delivering: session events are queued in
-	// commit order (while sessionMu is held) and delivered in that order.
+	// commit order (while sessionLock is held) and delivered in that order.
 	evMu       sync.Mutex
 	evQueue    []queuedEvent
 	delivering bool
 
-	// removalEpoch is bumped by removeSession so an in-flight refresh can
-	// detect a concurrent sign-out that happened while it saved.
-	removalEpoch atomic.Uint64
-
-	// refreshMu guards refreshing and lastRefreshFailure.
+	// refreshMu guards lastRefreshFailure.
 	refreshMu          sync.Mutex
-	refreshing         map[string]*refreshCall
 	lastRefreshFailure *refreshFailure
 	// refreshRetryBudget and refreshRetryBase bound the retries of a
 	// refresh that failed with a retryable error (replaceable in tests).
@@ -213,11 +217,15 @@ func New(cfg Config) (*Client, error) {
 		listeners:  map[uint64]func(AuthChangeEvent, *Session){},
 		now:        time.Now,
 
-		refreshing:         map[string]*refreshCall{},
+		sessionLock:        make(chan struct{}, 1),
+		lockTimeout:        cfg.LockAcquireTimeout,
 		refreshRetryBudget: autoRefreshTickDuration,
 		refreshRetryBase:   200 * time.Millisecond,
 		tickDuration:       autoRefreshTickDuration,
 		customAuth:         headers.Get("Authorization") != "",
+	}
+	if c.lockTimeout == 0 {
+		c.lockTimeout = DefaultLockAcquireTimeout
 	}
 	if c.storage == nil {
 		c.storage = NewMemoryStorage()

@@ -805,7 +805,7 @@ func TestMFAContextCanceled(t *testing.T) {
 // upstream: auth-js src/GoTrueClient.ts _verify (concurrent use)
 func TestMFAConcurrentVerify(t *testing.T) {
 	// Stored-session verifications rotate the refresh token server-side, so
-	// they are serialized (rotateMu): each one re-reads the session the
+	// they are serialized (session lock): each one re-reads the session the
 	// previous one committed and uses its access token.
 	const n = 8
 	var inFlight, maxInFlight atomic.Int32

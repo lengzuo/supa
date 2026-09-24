@@ -53,38 +53,47 @@ func (c *Client) LinkIdentity(ctx context.Context, accessToken string, params Si
 
 // LinkIdentityWithIDToken links an OIDC identity to the user with an ID
 // token (POST /token?grant_type=id_token with link_identity). With
-// accessToken == "" the returned session replaces the stored one and
-// USER_UPDATED is emitted, provided the stored session is still the one
-// the request was made with (a session signed out or rotated meanwhile is
-// left alone).
+// accessToken == "" the request is made under the session lock with the
+// stored session's access token, the returned session replaces the stored
+// one and USER_UPDATED is emitted.
 func (c *Client) LinkIdentityWithIDToken(ctx context.Context, accessToken string, params SignInWithIDTokenParams) (*AuthResponse, error) {
 	if params.Provider == "" || params.Token == "" {
 		return nil, fmt.Errorf("%w: provider and token are required", ErrInvalidArgument)
-	}
-	token, session, err := c.sessionToken(ctx, accessToken)
-	if err != nil {
-		return nil, err
 	}
 	body := struct {
 		SignInWithIDTokenParams
 		LinkIdentity bool               `json:"link_identity"`
 		Meta         gotrueMetaSecurity `json:"gotrue_meta_security"`
 	}{params, true, metaSecurity(params.CaptchaToken)}
-	resp, err := c.postSession(ctx, "/token", url.Values{"grant_type": {"id_token"}}, token, body)
+	link := func(ctx context.Context, token string) (*AuthResponse, error) {
+		resp, err := c.postSession(ctx, "/token", url.Values{"grant_type": {"id_token"}}, token, body)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Session == nil || resp.User == nil {
+			return nil, ErrInvalidTokenResponse
+		}
+		return resp, nil
+	}
+	if accessToken != "" {
+		return link(ctx, accessToken)
+	}
+	var out *AuthResponse
+	err := c.lockedSessionOp(ctx, false, func(ctx context.Context, s *Session) error {
+		resp, err := link(ctx, s.AccessToken)
+		if err != nil {
+			return err
+		}
+		if err := c.commitLocked(ctx, resp.Session, EventUserUpdated); err != nil {
+			return err
+		}
+		out = resp
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if resp.Session == nil || resp.User == nil {
-		return nil, ErrInvalidTokenResponse
-	}
-	if session != nil {
-		// Only replace the stored session if it is still the one the link
-		// was made with; never resurrect one signed out meanwhile.
-		if _, err := c.replaceSessionIfCurrent(ctx, basisOf(session), resp.Session, EventUserUpdated); err != nil {
-			return nil, err
-		}
-	}
-	return resp, nil
+	return out, nil
 }
 
 // UnlinkIdentity removes an identity from the user
