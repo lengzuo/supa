@@ -3,29 +3,91 @@ package realtime
 import (
 	"context"
 	"log/slog"
+	"net/url"
+	"reflect"
 	"regexp"
 	"sync"
 )
 
 var reAPIKeyParam = regexp.MustCompile(`(?i)(apikey=)[^&\s"']*`)
 
-// redactedError hides the apikey query parameter that dial errors (which
-// embed the URL) would otherwise expose, while keeping errors.Is/As.
+func redactString(s string) string {
+	return reAPIKeyParam.ReplaceAllString(s, "${1}REDACTED")
+}
+
+// redactError hides the apikey query parameter that dial errors (which
+// embed the URL) would otherwise expose. Every *url.Error in err's tree is
+// redacted in place (as internal/transport does), and every other error
+// whose message leaks the key is replaced by a redactedError, so neither
+// Error, %+v, errors.Unwrap nor errors.As can reveal the key.
+// errors.Is keeps matching the original errors.
+func redactError(err error) error {
+	if err == nil {
+		return nil
+	}
+	redactURLErrors(err, 0)
+	msg := err.Error()
+	red := redactString(msg)
+	if red == msg {
+		return err
+	}
+	return &redactedError{msg: red, err: err}
+}
+
+// redactURLErrors rewrites the URL of every *url.Error in err's tree.
+func redactURLErrors(err error, depth int) {
+	if err == nil || depth > 100 {
+		return
+	}
+	if ue, ok := err.(*url.Error); ok {
+		ue.URL = redactString(ue.URL)
+	}
+	switch x := err.(type) {
+	case interface{ Unwrap() error }:
+		redactURLErrors(x.Unwrap(), depth+1)
+	case interface{ Unwrap() []error }:
+		for _, e := range x.Unwrap() {
+			redactURLErrors(e, depth+1)
+		}
+	}
+}
+
+// redactedError stands in for an error whose message contains the API
+// key. It exposes only redacted views of the original's wrapped errors.
 type redactedError struct {
 	msg string
 	err error
 }
 
 func (e *redactedError) Error() string { return e.msg }
-func (e *redactedError) Unwrap() error { return e.err }
 
-func redactError(err error) error {
-	msg := err.Error()
-	red := reAPIKeyParam.ReplaceAllString(msg, "${1}REDACTED")
-	if red == msg {
-		return err
+// Unwrap returns redacted views of the errors wrapped by the original.
+func (e *redactedError) Unwrap() []error {
+	var inner []error
+	switch x := e.err.(type) {
+	case interface{ Unwrap() error }:
+		if u := x.Unwrap(); u != nil {
+			inner = []error{u}
+		}
+	case interface{ Unwrap() []error }:
+		inner = x.Unwrap()
 	}
-	return &redactedError{msg: red, err: err}
+	out := make([]error, 0, len(inner))
+	for _, u := range inner {
+		if u != nil {
+			out = append(out, redactError(u))
+		}
+	}
+	return out
+}
+
+// Is reports whether target is the original (unredacted) error, so that
+// errors.Is keeps working without exposing it.
+func (e *redactedError) Is(target error) bool {
+	if target == nil || !reflect.TypeOf(target).Comparable() || !reflect.TypeOf(e.err).Comparable() {
+		return false
+	}
+	return target == e.err
 }
 
 // wsConn is one connection attempt. Fields other than q are guarded by

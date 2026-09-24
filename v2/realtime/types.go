@@ -142,8 +142,10 @@ type SendParams struct {
 	// Event is the event name.
 	Event string
 	// Payload is JSON-encoded unless it is json.RawMessage (sent as-is) or
-	// []byte (sent as a binary payload; requires protocol VSN2). Nil omits
-	// the payload.
+	// []byte (sent as a binary payload over the websocket; only allowed for
+	// broadcasts with protocol VSN2, otherwise Send returns an error). Nil
+	// omits the payload; with VSN2 a nil or JSON null broadcast payload is
+	// sent as {} like realtime-js.
 	Payload any
 	// Timeout overrides the client timeout for this push.
 	Timeout time.Duration

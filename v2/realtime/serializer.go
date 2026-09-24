@@ -151,7 +151,8 @@ func encodeUserBroadcastPush(msg outMessage, args *sendArgs) ([]byte, error) {
 		}
 		payload = b
 	}
-	if !args.hasPayload || (encoding == binEncodingJSON && len(payload) == 0) {
+	// Upstream sends `payload ?? {}`: a missing or null payload becomes {}.
+	if !args.hasPayload || (encoding == binEncodingJSON && (len(payload) == 0 || string(bytes.TrimSpace(payload)) == "null")) {
 		payload = []byte("{}")
 	}
 	fields := []struct {

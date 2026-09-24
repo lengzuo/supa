@@ -1,7 +1,10 @@
 package realtime
 
 import (
+	"bytes"
 	"fmt"
+	"runtime"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -15,7 +18,23 @@ type dispatcher struct {
 	mu      sync.Mutex
 	queue   []func()
 	running bool
+	gid     uint64          // goroutine ID of the running dispatcher
+	waiters []chan struct{} // closed when the queue drains
 	onPanic func(v any)
+}
+
+// idle returns a channel that is closed once every queued callback has
+// run, or nil if the queue is already empty or self is the dispatcher
+// goroutine (a callback cannot wait for itself).
+func (d *dispatcher) idle(self uint64) <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.running || d.gid == self {
+		return nil
+	}
+	w := make(chan struct{})
+	d.waiters = append(d.waiters, w)
+	return w
 }
 
 func (d *dispatcher) enqueue(fn func()) {
@@ -29,11 +48,20 @@ func (d *dispatcher) enqueue(fn func()) {
 }
 
 func (d *dispatcher) run() {
+	gid := goroutineID()
+	d.mu.Lock()
+	d.gid = gid
+	d.mu.Unlock()
 	for {
 		d.mu.Lock()
 		if len(d.queue) == 0 {
 			d.running = false
+			d.gid = 0
 			d.queue = nil
+			for _, w := range d.waiters {
+				close(w)
+			}
+			d.waiters = nil
 			d.mu.Unlock()
 			return
 		}
@@ -111,6 +139,20 @@ func (b *backoffTimer) schedule() {
 		b.tries++
 		b.fn()
 	})
+}
+
+// goroutineID returns the current goroutine's ID. It is only used to
+// detect re-entrant calls (Disconnect from a callback or from a background
+// task) that must not wait for themselves.
+func goroutineID() uint64 {
+	var buf [64]byte
+	b := buf[:runtime.Stack(buf[:], false)]
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	if i := bytes.IndexByte(b, ' '); i >= 0 {
+		b = b[:i]
+	}
+	id, _ := strconv.ParseUint(string(b), 10, 64)
+	return id
 }
 
 func panicError(v any) error {

@@ -1,23 +1,23 @@
 features:
   realtime.channel.broadcast_http:
     status: implemented
-    symbols: [realtime.Channel.HTTPSend, realtime.HTTPError]
-    tests: [TestHTTPSend]
+    symbols: [realtime.Channel.HTTPSend, realtime.HTTPError, realtime.Config.RequestEditors]
+    tests: [TestHTTPSend, TestRequestEditorsApplyToHTTPBroadcasts]
     reason: ""
   realtime.channel.broadcast:
     status: implemented
     symbols: [realtime.Channel.Send, realtime.SendParams]
-    tests: [TestBroadcastSendNoAck, TestBroadcastAck, TestSendFallsBackToHTTP, TestCallbackMayCallClient]
+    tests: [TestBroadcastSendNoAck, TestBroadcastAck, TestSendFallsBackToHTTP, TestCallbackMayCallClient, TestSendBinaryPayloadValidation, TestBroadcastNullPayloadSentAsEmptyObject, TestRequestEditorsApplyToHTTPBroadcasts]
     reason: ""
   realtime.channel.subscribe:
     status: implemented
     symbols: [realtime.Channel.Subscribe, realtime.Channel.OnStatus, realtime.SubscribeError]
-    tests: [TestSubscribeJoinPayload, TestSubscribeJoinErrorAndRejoin, TestSubscribeTimeout, TestSubscribeContextCanceled, TestServerChannelCloseAndError]
+    tests: [TestSubscribeJoinPayload, TestSubscribeJoinErrorAndRejoin, TestSubscribeTimeout, TestSubscribeContextCanceled, TestSubscribeCancelledWaitersPruned, TestServerChannelCloseAndError]
     reason: ""
   realtime.channel.unsubscribe:
     status: implemented
     symbols: [realtime.Channel.Unsubscribe]
-    tests: [TestUnsubscribeAndDeferredDisconnect]
+    tests: [TestUnsubscribeAndDeferredDisconnect, TestAutoDisconnectThenImmediateSubscribe]
     reason: ""
   realtime.client.channel:
     status: implemented
@@ -27,7 +27,7 @@ features:
   realtime.client.connect:
     status: implemented
     symbols: [realtime.New, realtime.Client.Connect]
-    tests: [TestConnectConnectionStateDisconnect, TestConnectFailureThenReconnect, TestEndpointURL]
+    tests: [TestConnectConnectionStateDisconnect, TestConnectFailureThenReconnect, TestEndpointURL, TestDialErrorRedactsAPIKey, TestDialErrorRedactsWrappedURLError]
     reason: ""
   realtime.client.connection_state:
     status: implemented
@@ -37,7 +37,7 @@ features:
   realtime.client.disconnect:
     status: implemented
     symbols: [realtime.Client.Disconnect, realtime.Client.DisconnectWithCode]
-    tests: [TestConnectConnectionStateDisconnect, TestDisconnectNoGoroutineLeak]
+    tests: [TestConnectConnectionStateDisconnect, TestDisconnectNoGoroutineLeak, TestDisconnectWaitsForBackgroundWork, TestDisconnectFromCallback]
     reason: ""
   realtime.client.get_channels:
     status: implemented
@@ -52,12 +52,12 @@ features:
   realtime.client.remove_all_channels:
     status: implemented
     symbols: [realtime.Client.RemoveAllChannels]
-    tests: [TestRemoveChannelAndRemoveAll]
+    tests: [TestRemoveChannelAndRemoveAll, TestDisconnectFromCallback]
     reason: ""
   realtime.client.remove_channel:
     status: implemented
     symbols: [realtime.Client.RemoveChannel]
-    tests: [TestRemoveChannelAndRemoveAll, TestDeferredDisconnectCancelledByNewChannel]
+    tests: [TestRemoveChannelAndRemoveAll, TestDeferredDisconnectCancelledByNewChannel, TestAutoDisconnectThenImmediateSubscribe]
     reason: ""
   realtime.client.set_auth_token:
     status: implemented
@@ -67,7 +67,7 @@ features:
   realtime.configuration.access_token_callback:
     status: implemented
     symbols: [realtime.Config.AccessToken, realtime.Client.SetAuth]
-    tests: [TestAccessTokenCallback, TestSetAuthCallbackReturnsEmptyClearsToken, TestSendFallsBackToHTTP]
+    tests: [TestAccessTokenCallback, TestSetAuthCallbackReturnsEmptyClearsToken, TestSendFallsBackToHTTP, TestDisconnectWaitsForBackgroundWork]
     reason: ""
   realtime.configuration.binary_protocol:
     status: implemented
@@ -87,7 +87,7 @@ features:
   realtime.configuration.deferred_disconnect:
     status: implemented
     symbols: [realtime.Config.DisconnectOnEmptyChannelsAfter]
-    tests: [TestUnsubscribeAndDeferredDisconnect, TestDeferredDisconnectCancelledByNewChannel]
+    tests: [TestUnsubscribeAndDeferredDisconnect, TestDeferredDisconnectCancelledByNewChannel, TestAutoDisconnectThenImmediateSubscribe]
     reason: ""
   realtime.configuration.heartbeat_interval:
     status: implemented

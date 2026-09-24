@@ -2,7 +2,7 @@ features:
   functions.invocation.invoke:
     status: implemented
     symbols: [functions.New, functions.Client.Invoke, functions.InvokeJSON, functions.InvokeOptions, functions.Response, functions.Response.DecodeJSON, functions.Response.Bytes, functions.Response.Text, functions.Response.MediaType, functions.HTTPError, functions.RelayError, functions.FetchError]
-    tests: [TestInvoke, TestInvoke_BodyContentType, TestInvoke_NewAPIKeyNotSentAsBearer, TestInvoke_HTTPError, TestInvoke_RelayError, TestInvoke_FetchError, TestInvoke_FunctionName, TestInvokeJSON, TestResponseHelpers]
+    tests: [TestInvoke, TestInvoke_BodyContentType, TestInvoke_FalsyBodiesSendNoBody, TestInvoke_ClientContentTypeOverridesInferred, TestInvoke_NewAPIKeyNotSentAsBearer, TestInvoke_HTTPError, TestInvoke_RelayError, TestInvoke_RelayErrorExactTrue, TestRelayError_Error, TestInvoke_FetchError, TestFetchError_Messages, TestInvoke_RequestEditorTraceparent, TestInvoke_FunctionName, TestInvokeJSON, TestResponseHelpers]
     reason: ""
   functions.invocation.method_override:
     status: implemented
@@ -30,7 +30,12 @@ features:
     tests: [TestInvoke_StreamingResponse]
     reason: ""
   functions.invocation.timeout:
+    # Deviation from upstream: InvokeOptions.Timeout also bounds reading the
+    # response body (it stays armed until Response.Close), including streamed
+    # text/event-stream bodies; functions-js clears its timer once a stream's
+    # headers arrive. Documented on InvokeOptions.Timeout with a recipe for a
+    # headers-only deadline.
     status: implemented
     symbols: [functions.Client.Invoke, functions.InvokeOptions]
-    tests: [TestInvoke_Timeout]
-    reason: ""
+    tests: [TestInvoke_Timeout, TestFetchError_Messages]
+    reason: "Timeout covers body reading (differs from upstream for streams); see InvokeOptions.Timeout."
