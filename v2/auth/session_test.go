@@ -165,20 +165,6 @@ func TestGetSession(t *testing.T) {
 			t.Fatalf("GetSession = %+v, %v", s, err)
 		}
 	})
-	t.Run("refresh discarded when storage changed in flight", func(t *testing.T) {
-		var c *Client
-		srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-			// A concurrent sign-in replaced the session mid-refresh.
-			coreStoreSession(t, c, "other-at", "other-rt", time.Now().Add(time.Hour))
-			coreJSON(w, 200, coreSession("at-2", "rt-2", 3600))
-		})
-		c = srv.client(t)
-		coreStoreSession(t, c, "at-1", "rt-1", time.Now().Add(-time.Minute))
-		s, err := c.GetSession(ctx)
-		if err != nil || s.AccessToken != "other-at" {
-			t.Fatalf("GetSession = %+v, %v", s, err)
-		}
-	})
 	t.Run("waiter context cancellation", func(t *testing.T) {
 		release := make(chan struct{})
 		srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {

@@ -60,26 +60,38 @@ func (c *Client) autoRefreshTick(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	c.refreshMu.Lock()
-	busy := len(c.refreshing) > 0
-	c.refreshMu.Unlock()
-	if busy {
+	if s, err := c.loadSession(ctx); err != nil || !c.dueForAutoRefresh(s) {
 		return
 	}
-	epoch := c.removalEpoch.Load()
-	s, err := c.loadSession(ctx)
-	if err != nil || s == nil || s.RefreshToken == "" || s.ExpiresAt == 0 {
+	// Like auth-js, skip the tick when another session operation is in
+	// progress instead of queuing behind it.
+	if !c.tryAcquireSessionLock() {
 		return
 	}
-	tick := c.tickDuration
-	expiresInTicks := int64(time.Unix(s.ExpiresAt, 0).Sub(c.now()) / tick)
-	if time.Unix(s.ExpiresAt, 0).Before(c.now()) && time.Unix(s.ExpiresAt, 0).Sub(c.now())%tick != 0 {
-		expiresInTicks-- // floor for negative durations, like Math.floor
-	}
-	if expiresInTicks > autoRefreshTickThreshold {
-		return
-	}
-	if _, err := c.callRefreshToken(ctx, s.RefreshToken, epoch, true); err != nil {
+	err := c.runLocked(ctx, func(ctx context.Context) error {
+		s, err := c.loadSession(ctx)
+		if err != nil || !c.dueForAutoRefresh(s) {
+			return err
+		}
+		_, err = c.refreshLocked(ctx, s.RefreshToken)
+		return err
+	})
+	if err != nil {
 		c.debug(ctx, "auto refresh tick failed; will retry on the next tick", "error", err.Error())
 	}
+}
+
+// dueForAutoRefresh reports whether s expires within
+// autoRefreshTickThreshold ticks.
+func (c *Client) dueForAutoRefresh(s *Session) bool {
+	if s == nil || s.RefreshToken == "" || s.ExpiresAt == 0 {
+		return false
+	}
+	tick := c.tickDuration
+	left := time.Unix(s.ExpiresAt, 0).Sub(c.now())
+	expiresInTicks := int64(left / tick)
+	if left < 0 && left%tick != 0 {
+		expiresInTicks-- // floor for negative durations, like Math.floor
+	}
+	return expiresInTicks <= autoRefreshTickThreshold
 }

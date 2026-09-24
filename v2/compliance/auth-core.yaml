@@ -49,7 +49,7 @@ features:
   auth.sign_in.exchange_code_for_session:
     status: implemented
     symbols: [auth.Client.ExchangeCodeForSession, auth.ExchangeCodeOptions]
-    tests: [TestExchangeCodeForSession, TestExchangeCodeForSessionNoStore]
+    tests: [TestExchangeCodeForSession, TestExchangeCodeForSessionNoStore, TestNoStoreExchangeLeavesNoVerifier]
     reason: ""
   auth.sign_in.reauthenticate:
     status: implemented
@@ -75,7 +75,7 @@ features:
   auth.session.auto_refresh:
     status: implemented
     symbols: [auth.Client.StartAutoRefresh, auth.Client.StopAutoRefresh, auth.Config]
-    tests: [TestAutoRefresh, TestAutoRefreshConfig]
+    tests: [TestAutoRefresh, TestAutoRefreshConfig, TestSessionLockChaos]
     reason: ""
   auth.session.get_claims:
     status: implemented
@@ -85,7 +85,7 @@ features:
   auth.session.get_session:
     status: implemented
     symbols: [auth.Client.GetSession, auth.ExpiryMargin, auth.ErrRefreshDiscarded]
-    tests: [TestGetSession, TestRefreshDiscardedAfterSignOut, TestRefreshFailureCacheOnlyAuthErrors, TestRefreshListenerCanRefresh, TestLoadSessionCorruptEntry, TestRefreshStaleTokenNotSent, TestRefreshStaleTokenRefreshesStored, TestRefreshChaosStrictServer, TestRefreshEventOrder, TestRefreshFailureListenerReentry, TestRefreshFailureKeepsNewerSession, TestRefreshPreSendErrorNotRetried]
+    tests: [TestGetSession, TestRefreshAfterStaleRead, TestRefreshFailureCacheOnlyAuthErrors, TestRefreshListenerCanRefresh, TestLoadSessionCorruptEntry, TestSessionLockChaos, TestGetSessionWhileLockHeld, TestRefreshChaosStrictServer, TestRefreshEventOrder, TestRefreshFailureListenerReentry, TestSessionLockWaitHonoursContext, TestRefreshPreSendErrorNotRetried]
     reason: ""
   auth.session.get_user:
     status: implemented
@@ -105,7 +105,7 @@ features:
   auth.session.sign_out:
     status: implemented
     symbols: [auth.Client.SignOut, auth.SignOutScope]
-    tests: [TestSignOut, TestSignOutKeepsConcurrentSignIn]
+    tests: [TestSignOut, TestSignOutSerializedWithRotations]
     reason: ""
   auth.session.sign_out_reason:
     status: not_applicable
@@ -125,13 +125,13 @@ features:
   auth.session.update_user:
     status: implemented
     symbols: [auth.Client.UpdateUser, auth.UpdateUserParams]
-    tests: [TestUpdateUser, TestUpdateUserConcurrentRefresh, TestUpdateUserConcurrentSignOut, TestUpdateUserDecodeFailureRemovesVerifier]
+    tests: [TestUpdateUser, TestUpdateUserThenRefresh, TestSessionWriteThenSignOut, TestUpdateUserDecodeFailureRemovesVerifier]
     reason: ""
 
   auth.identities.link_identity:
     status: implemented
     symbols: [auth.Client.LinkIdentity, auth.Client.LinkIdentityWithIDToken]
-    tests: [TestLinkIdentity, TestLinkIdentityConcurrentSignOut]
+    tests: [TestLinkIdentity, TestListenerReentrancy]
     reason: ""
   auth.identities.list_identities:
     status: implemented

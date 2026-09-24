@@ -260,6 +260,15 @@ Methods that act for a user (`GetUser`, `UpdateUser`, `SignOut`,
 user without touching the stored session. You can also start and stop the
 refresher yourself with `StartAutoRefresh(ctx)` / `StopAutoRefresh()`.
 
+Operations on the stored session (sign-in, refresh, `UpdateUser`, MFA
+verification, `SignOut`, ...) are serialized by one client-wide session
+lock, like auth-js, so a refresh token is never used twice and a signed-out
+session never comes back. Waiting for it honours `ctx` and
+`auth.Config.LockAcquireTimeout` (default 10s; `auth.ErrLockAcquireTimeout`).
+Token-rotating requests (refresh, MFA verify) complete and are stored even if
+the caller's `ctx` is cancelled. Explicit-token and `NoStore` calls never
+wait for the lock, and a `SessionStorage` must not call back into the client.
+
 ### Custom session storage
 
 Implement [`auth.SessionStorage`](https://pkg.go.dev/github.com/lengzuo/supa/v2/auth#SessionStorage)

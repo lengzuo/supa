@@ -106,76 +106,6 @@ func (p *pausingStorage) GetItem(ctx context.Context, key string) (string, error
 	return v, err
 }
 
-// upstream: auth-js src/GoTrueClient.ts _callRefreshToken (never send a rotated refresh token)
-func TestRefreshStaleTokenNotSent(t *testing.T) {
-	ctx := context.Background()
-	srv := newStrictRefreshServer(t, "rt.1.1", 3600)
-	store := newPausingStorage("sb-test-auth-token")
-	c := srv.client(t, func(cfg *Config) { cfg.Storage = store; cfg.StorageKey = "sb-test-auth-token" })
-	coreStoreSession(t, c, "at.1", "rt.1.1", time.Now().Add(time.Hour))
-
-	store.arm()
-	type result struct {
-		resp *AuthResponse
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		resp, err := c.RefreshSession(ctx, "") // reads rt.1.1, then pauses
-		done <- result{resp, err}
-	}()
-	<-store.paused
-	for i := 0; i < 2; i++ { // rt.1.1 -> rt.1.2 -> rt.1.3
-		if _, err := c.RefreshSession(ctx, ""); err != nil {
-			t.Fatal(err)
-		}
-	}
-	close(store.resume)
-	res := <-done
-	if srv.reused.Load() {
-		t.Fatal("stale refresh token was sent to the server")
-	}
-	if res.err != nil || res.resp.Session.RefreshToken != "rt.1.3" {
-		t.Fatalf("stale caller got %+v, %v", res.resp, res.err)
-	}
-	if n := srv.count("/auth/v1/token"); n != 2 {
-		t.Fatalf("%d /token requests, want 2", n)
-	}
-	if st := coreStored(t, c); st.RefreshToken != "rt.1.3" {
-		t.Fatalf("stored = %q", st.RefreshToken)
-	}
-}
-
-// upstream: auth-js src/GoTrueClient.ts _callRefreshToken (stale token, stored session also expiring)
-func TestRefreshStaleTokenRefreshesStored(t *testing.T) {
-	ctx := context.Background()
-	srv := newStrictRefreshServer(t, "rt.1.1", 30) // every session is within the margin
-	store := newPausingStorage("sb-test-auth-token")
-	c := srv.client(t, func(cfg *Config) { cfg.Storage = store; cfg.StorageKey = "sb-test-auth-token" })
-	coreStoreSession(t, c, "at.1", "rt.1.1", time.Now().Add(10*time.Second))
-
-	store.arm()
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.GetSession(ctx)
-		done <- err
-	}()
-	<-store.paused
-	if _, err := c.GetSession(ctx); err != nil { // rt.1.1 -> rt.1.2
-		t.Fatal(err)
-	}
-	close(store.resume)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if srv.reused.Load() {
-		t.Fatal("stale refresh token was sent to the server")
-	}
-	if st := coreStored(t, c); st.RefreshToken != srv.currentToken() {
-		t.Fatalf("stored %q, server %q", st.RefreshToken, srv.currentToken())
-	}
-}
-
 // upstream: auth-js src/GoTrueClient.ts _callRefreshToken (concurrent refresh chaos, strict reuse detection)
 func TestRefreshChaosStrictServer(t *testing.T) {
 	ctx := context.Background()
@@ -245,7 +175,8 @@ func TestRefreshFailureListenerReentry(t *testing.T) {
 		if e == EventSignedOut {
 			cctx, cancel := context.WithTimeout(ctx, time.Second)
 			defer cancel()
-			_, err := c.callRefreshToken(cctx, "rt-1", c.removalEpoch.Load(), false)
+			expired := coreJWT(map[string]any{"sub": "u", "exp": time.Now().Add(-time.Hour).Unix()})
+			_, err := c.SetSession(cctx, expired, "rt-1") // takes the session lock
 			reentered <- err
 		}
 	})
@@ -263,40 +194,6 @@ func TestRefreshFailureListenerReentry(t *testing.T) {
 	if n := srv.count("/auth/v1/token"); n != 1 {
 		t.Fatalf("%d /token requests, want 1", n)
 	}
-}
-
-// upstream: auth-js src/GoTrueClient.ts _callRefreshToken (removal only of the failed session)
-func TestRefreshFailureKeepsNewerSession(t *testing.T) {
-	ctx := context.Background()
-	g := newGate()
-	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-		if r.Query.Get("grant_type") == "password" {
-			s := coreSession("fresh-at", "fresh-rt", 3600)
-			s["expires_at"] = time.Now().Add(-time.Second).Unix() // already expired access token
-			coreJSON(w, 200, s)
-			return
-		}
-		g.wait()
-		coreJSON(w, 400, map[string]any{"code": ErrorCodeRefreshTokenNotFound, "msg": "Invalid Refresh Token"})
-	})
-	c := srv.client(t)
-	coreStoreSession(t, c, "old-at", "old-rt", time.Now().Add(-time.Minute))
-	ev := coreWatch(c)
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.GetSession(ctx)
-		done <- err
-	}()
-	g.await(t)
-	if _, err := c.SignInWithPassword(ctx, SignInWithPasswordParams{Email: "a@b.c", Password: "pw"}); err != nil {
-		t.Fatal(err)
-	}
-	close(g.release)
-	<-done
-	if st := coreStored(t, c); st == nil || st.RefreshToken != "fresh-rt" {
-		t.Fatalf("fresh sign-in removed by a stale refresh failure: %+v", st)
-	}
-	coreAssertEvents(t, ev, EventSignedIn)
 }
 
 // upstream: auth-js src/GoTrueClient.ts _getUser (session_not_found removes only that session)

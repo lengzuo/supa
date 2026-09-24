@@ -85,38 +85,6 @@ func TestGetSessionFromURLNoStore(t *testing.T) {
 	coreAssertEvents(t, pev)
 }
 
-// upstream: auth-js src/GoTrueClient.ts _signOut (only the signed-out session is removed)
-func TestSignOutKeepsConcurrentSignIn(t *testing.T) {
-	ctx := context.Background()
-	g := newGate()
-	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-		switch r.Path {
-		case "/auth/v1/logout":
-			g.wait()
-			w.WriteHeader(204)
-		default:
-			coreJSON(w, 200, coreSession("fresh-at", "fresh-rt", 3600))
-		}
-	})
-	c := srv.client(t)
-	coreStoreSession(t, c, "old-at", "old-rt", time.Now().Add(time.Hour))
-	ev := coreWatch(c)
-	done := make(chan error, 1)
-	go func() { done <- c.SignOut(ctx, "", SignOutLocal) }()
-	g.await(t)
-	if _, err := c.SignInWithPassword(ctx, SignInWithPasswordParams{Email: "a@b.c", Password: "pw"}); err != nil {
-		t.Fatal(err)
-	}
-	close(g.release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if st := coreStored(t, c); st == nil || st.AccessToken != "fresh-at" {
-		t.Fatalf("concurrent sign-in removed by SignOut: %+v", st)
-	}
-	coreAssertEvents(t, ev, EventSignedIn)
-}
-
 // upstream: auth-js src/GoTrueClient.ts getClaims (JWK use / key_ops, unknown-kid fetch)
 func TestGetClaimsKeyUsageAndUnknownKidCache(t *testing.T) {
 	ctx := context.Background()

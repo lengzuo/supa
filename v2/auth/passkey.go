@@ -132,14 +132,9 @@ func (p *PasskeyAPI) VerifyAuthentication(ctx context.Context, params VerifyPass
 		return nil, fmt.Errorf("%w: credential is not valid JSON", ErrInvalidArgument)
 	}
 	body := map[string]any{"challenge_id": params.ChallengeID, "credential": params.Credential}
-	resp, err := p.c.postSession(ctx, "/passkeys/authentication/verify", nil, "", body)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.c.maybeCommit(ctx, resp, EventSignedIn); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return p.c.lockedSignIn(ctx, EventSignedIn, func() (*AuthResponse, error) {
+		return p.c.postSession(ctx, "/passkeys/authentication/verify", nil, "", body)
+	})
 }
 
 // List returns the user's passkeys (GET /passkeys).

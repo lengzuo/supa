@@ -87,21 +87,30 @@ compliance YAML.
 1. **Never fall back to the API key when a session exists but cannot be
    loaded or refreshed.** With a secret key that silently bypasses RLS. Fail
    closed.
-2. **Never write back a session snapshot taken before a network call.**
-   Re-read under `sessionMu` and only commit if the stored session is still
-   the one the request started from (see `updateStoredUser`,
-   `replaceSessionIfCurrent`, `removalEpoch`).
-3. **Never send a refresh token that storage has already rotated past.**
-   GoTrue revokes the whole session on reuse.
-4. **Auth events are queued under `sessionMu` in commit order** and delivered
-   before the caller returns; never notify while holding a lock.
+2. **Stored-session operations run under the auth session lock for their
+   whole read → network → commit cycle** (`auth/lock.go`, the auth-js
+   `_acquireLock` model): sign-ins, `SetSession`, refreshes, auto-refresh,
+   `UpdateUser`, identity linking, MFA verify, `SignOut`, code exchange in
+   store mode, session_not_found cleanup. Read the session *inside* the
+   lock; never write back a snapshot taken outside it. Explicit-token and
+   `NoStore` paths never take the lock; `GetSession`'s not-near-expiry fast
+   path is a lock-free read.
+3. **Never send a refresh token that storage has already rotated past**
+   (GoTrue revokes the whole session on reuse). Token-rotating requests
+   (refresh, MFA/recovery verify) run in a goroutine that owns the lock,
+   detached from the caller's ctx (`withSessionLockDetached`), so a
+   cancelled caller never loses a rotation the server performed.
+4. **Auth events are queued under the session lock in commit order** and
+   delivered after it is released, before the operation's caller is
+   released; listeners may call back into the client. Never deliver events
+   while holding the lock.
 5. **Don't hold a mutex across network I/O**; use single-flight with
-   context-aware waiting. The one deliberate exception is `auth`'s
-   `rotateMu`, which serializes every request that makes GoTrue rotate the
-   refresh token (refresh, MFA verify), exactly like auth-js's
-   `_acquireLock`. Lock order is `rotateMu → sessionMu → evMu`; never
-   deliver events or call anything that may need `rotateMu` while holding
-   it.
+   context-aware waiting. The one deliberate exception is the auth session
+   lock: a one-slot channel semaphore acquired with `select` on
+   `ctx.Done()` and `Config.LockAcquireTimeout`, never a `sync.Mutex`.
+   Nothing called while holding it may take it again (use the `*Locked`
+   helpers), and `SessionStorage` implementations must not call back into
+   the client.
 6. **Headers are canonicalised and cloned per request.** A shared
    `http.Header` leaked tokens between users in v1.
 7. **Redact secrets inside wrapped errors too** (`*url.Error.URL`), not just

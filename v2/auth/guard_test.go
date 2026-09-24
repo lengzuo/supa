@@ -31,220 +31,6 @@ func (g *gate) await(t *testing.T) {
 	}
 }
 
-// upstream: auth-js src/GoTrueClient.ts _updateUser (write-back vs concurrent refresh)
-func TestUpdateUserConcurrentRefresh(t *testing.T) {
-	ctx := context.Background()
-	for _, tc := range []struct {
-		name        string
-		refreshUser string
-		wantUser    bool
-	}{
-		{"same user keeps rotated tokens", "user-1", true},
-		{"different user is left alone", "user-2", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			g := newGate()
-			srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-				switch r.Path {
-				case "/auth/v1/user":
-					g.wait()
-					u := coreUser("user-1")
-					u["user_metadata"] = map[string]any{"theme": "dark"}
-					coreJSON(w, 200, u)
-				case "/auth/v1/token":
-					s := coreSession("at-2", "rt-2", 3600)
-					s["user"] = coreUser(tc.refreshUser)
-					coreJSON(w, 200, s)
-				}
-			})
-			c := srv.client(t)
-			coreStoreSession(t, c, "at-1", "rt-1", time.Now().Add(time.Hour))
-			ev := coreWatch(c)
-			done := make(chan error, 1)
-			go func() {
-				_, err := c.UpdateUser(ctx, "", UpdateUserParams{Data: map[string]any{"theme": "dark"}})
-				done <- err
-			}()
-			g.await(t)
-			if _, err := c.RefreshSession(ctx, ""); err != nil {
-				t.Fatal(err)
-			}
-			close(g.release)
-			if err := <-done; err != nil {
-				t.Fatal(err)
-			}
-			st := coreStored(t, c)
-			if st == nil || st.RefreshToken != "rt-2" || st.AccessToken != "at-2" {
-				t.Fatalf("rotated tokens overwritten by stale write-back: %+v", st)
-			}
-			updated := st.User != nil && st.User.UserMetadata["theme"] == "dark"
-			if updated != tc.wantUser {
-				t.Fatalf("user updated = %v, want %v", updated, tc.wantUser)
-			}
-			want := []AuthChangeEvent{EventTokenRefreshed}
-			if tc.wantUser {
-				want = append(want, EventUserUpdated)
-			}
-			coreAssertEvents(t, ev, want...)
-		})
-	}
-}
-
-// upstream: auth-js src/GoTrueClient.ts _updateUser (write-back vs concurrent sign-out)
-func TestUpdateUserConcurrentSignOut(t *testing.T) {
-	ctx := context.Background()
-	g := newGate()
-	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-		switch r.Path {
-		case "/auth/v1/user":
-			g.wait()
-			coreJSON(w, 200, coreUser("user-1"))
-		case "/auth/v1/logout":
-			w.WriteHeader(204)
-		}
-	})
-	c := srv.client(t)
-	coreStoreSession(t, c, "at-1", "rt-1", time.Now().Add(time.Hour))
-	ev := coreWatch(c)
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.UpdateUser(ctx, "", UpdateUserParams{Password: "new"})
-		done <- err
-	}()
-	g.await(t)
-	if err := c.SignOut(ctx, "", SignOutLocal); err != nil {
-		t.Fatal(err)
-	}
-	close(g.release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if st := coreStored(t, c); st != nil {
-		t.Fatalf("signed-out session resurrected: %+v", st)
-	}
-	coreAssertEvents(t, ev, EventSignedOut)
-}
-
-// upstream: auth-js src/GoTrueClient.ts linkIdentityIdToken (write-back vs concurrent sign-out)
-func TestLinkIdentityConcurrentSignOut(t *testing.T) {
-	ctx := context.Background()
-	g := newGate()
-	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-		switch r.Path {
-		case "/auth/v1/token":
-			g.wait()
-			coreJSON(w, 200, coreSession("linked-at", "linked-rt", 3600))
-		case "/auth/v1/logout":
-			w.WriteHeader(204)
-		}
-	})
-	c := srv.client(t)
-	coreStoreSession(t, c, "at-1", "rt-1", time.Now().Add(time.Hour))
-	ev := coreWatch(c)
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.LinkIdentityWithIDToken(ctx, "", SignInWithIDTokenParams{Provider: "google", Token: "idt"})
-		done <- err
-	}()
-	g.await(t)
-	if err := c.SignOut(ctx, "", SignOutLocal); err != nil {
-		t.Fatal(err)
-	}
-	close(g.release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if st := coreStored(t, c); st != nil {
-		t.Fatalf("signed-out session resurrected: %+v", st)
-	}
-	coreAssertEvents(t, ev, EventSignedOut)
-}
-
-// upstream: auth-js src/GoTrueClient.ts _verify (MFA write-back vs concurrent sign-out)
-func TestMFAVerifyConcurrentSignOut(t *testing.T) {
-	ctx := context.Background()
-	g := newGate()
-	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-		switch r.Path {
-		case "/auth/v1/factors/f-1/verify", "/auth/v1/factors/recovery-codes/verify":
-			g.wait()
-			coreJSON(w, 200, coreSession("aal2-at", "aal2-rt", 3600))
-		case "/auth/v1/logout":
-			w.WriteHeader(204)
-		}
-	})
-	for _, verify := range []struct {
-		name string
-		fn   func(c *Client) (*Session, error)
-	}{
-		{"factor", func(c *Client) (*Session, error) {
-			return c.MFA().Verify(ctx, MFAVerifyParams{FactorID: "f-1", ChallengeID: "ch", Code: "123456"})
-		}},
-		{"recovery code", func(c *Client) (*Session, error) {
-			return c.MFA().RecoveryCodes().Verify(ctx, MFARecoveryCodesVerifyParams{Code: "abcd-efgh"})
-		}},
-	} {
-		t.Run(verify.name, func(t *testing.T) {
-			c := srv.client(t, func(cfg *Config) {})
-			coreStoreSession(t, c, "at-1", "rt-1", time.Now().Add(time.Hour))
-			ev := coreWatch(c)
-			type result struct {
-				s   *Session
-				err error
-			}
-			done := make(chan result, 1)
-			go func() {
-				s, err := verify.fn(c)
-				done <- result{s, err}
-			}()
-			g.await(t)
-			if err := c.SignOut(ctx, "", SignOutLocal); err != nil {
-				t.Fatal(err)
-			}
-			g.release <- struct{}{}
-			res := <-done
-			if res.err != nil || res.s == nil || res.s.AccessToken != "aal2-at" {
-				t.Fatalf("Verify = %+v, %v", res.s, res.err)
-			}
-			if st := coreStored(t, c); st != nil {
-				t.Fatalf("signed-out session resurrected by MFA verify: %+v", st)
-			}
-			coreAssertEvents(t, ev, EventSignedOut)
-		})
-	}
-}
-
-// upstream: auth-js src/GoTrueClient.ts _callRefreshToken (commit guard vs _removeSession)
-func TestRefreshDiscardedAfterSignOut(t *testing.T) {
-	ctx := context.Background()
-	g := newGate()
-	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
-		g.wait()
-		coreJSON(w, 200, coreSession("at-2", "rt-2", 3600))
-	})
-	c := srv.client(t)
-	ev := coreWatch(c)
-	expired := coreJWT(map[string]any{"sub": "user-1", "exp": time.Now().Add(-time.Hour).Unix()})
-	done := make(chan error, 1)
-	go func() {
-		// Empty storage: only the removal epoch can detect the sign-out.
-		_, err := c.SetSession(ctx, expired, "rt-1")
-		done <- err
-	}()
-	g.await(t)
-	if err := c.clearSession(ctx); err != nil {
-		t.Fatal(err)
-	}
-	close(g.release)
-	if err := <-done; !errors.Is(err, ErrRefreshDiscarded) {
-		t.Fatalf("err = %v, want ErrRefreshDiscarded", err)
-	}
-	if st := coreStored(t, c); st != nil {
-		t.Fatalf("refresh resurrected a signed-out session: %+v", st)
-	}
-	coreAssertEvents(t, ev, EventSignedOut)
-}
-
 // upstream: auth-js src/GoTrueClient.ts _callRefreshToken (lastRefreshFailure caches AuthError only)
 func TestRefreshFailureCacheOnlyAuthErrors(t *testing.T) {
 	ctx := context.Background()
@@ -335,7 +121,9 @@ func TestLoadSessionCorruptEntry(t *testing.T) {
 	}
 }
 
-// upstream: auth-js src/GoTrueClient.ts _callRefreshToken (refreshingDeferred resolved before notify)
+// A listener may call locking methods: events are delivered after the
+// session lock is released.
+// upstream: auth-js src/GoTrueClient.ts _notifyAllSubscribers (outside the lock)
 func TestRefreshListenerCanRefresh(t *testing.T) {
 	ctx := context.Background()
 	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
@@ -348,9 +136,7 @@ func TestRefreshListenerCanRefresh(t *testing.T) {
 	c.OnAuthStateChange(func(e AuthChangeEvent, _ *Session) {
 		if e == EventTokenRefreshed {
 			once.Do(func() {
-				// The in-flight call for rt-1 is already finished, so this
-				// does not wait on itself.
-				_, err := c.callRefreshToken(ctx, "rt-1", c.removalEpoch.Load(), true)
+				_, err := c.RefreshSession(ctx, "")
 				got <- err
 			})
 		}
@@ -359,8 +145,11 @@ func TestRefreshListenerCanRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-got:
-	case <-time.After(2 * time.Second):
-		t.Fatal("listener deadlocked on the in-flight refresh")
+	case err := <-got:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("listener did not run before GetSession returned")
 	}
 }

@@ -281,60 +281,44 @@ func (m *MFAAPI) mfaDo(ctx context.Context, method, path string, body, out any) 
 
 // mfaVerify performs a verification request (factor or recovery code)
 // that upgrades the session. The server swaps the session's refresh token
-// when it succeeds, so in stored-session mode the request runs under
-// rotateMu: the stored session is (re)read under the lock, the request is
-// made with its access token, and the aal2 session is committed before the
-// lock is released. A concurrent refresh therefore either completes before
-// (and this request uses its result) or starts after and sees the new
-// refresh token; the stale one is never kept in storage. The new session
-// replaces the stored one only if that is still the one the request was
-// made with (a session signed out meanwhile is never resurrected). The
-// upgraded session is returned to the caller either way. With
-// WithAccessToken nothing is stored and no event is emitted.
+// when it succeeds, so in stored-session mode it runs under the session
+// lock, detached from ctx: the stored session is re-read under the lock,
+// the request is made with its access token, and the aal2 session is
+// committed before the lock is released (a caller that gives up never
+// loses the rotation). With WithAccessToken nothing is stored and no event
+// is emitted.
 func (m *MFAAPI) mfaVerify(ctx context.Context, path string, body any) (*Session, error) {
-	var s Session
-	fill := func() {
+	verify := func(ctx context.Context, token string) (*Session, error) {
+		var s Session
+		if err := m.c.request(ctx, &transport.Request{Method: http.MethodPost, Path: path, Body: body, Token: token}, &s); err != nil {
+			return nil, err
+		}
 		if s.ExpiresAt == 0 && s.ExpiresIn > 0 {
 			s.ExpiresAt = m.c.now().Unix() + s.ExpiresIn
 		}
-	}
-	if m.token != "" {
-		if err := m.c.request(ctx, &transport.Request{Method: http.MethodPost, Path: path, Body: body, Token: m.token}, &s); err != nil {
-			return nil, err
-		}
-		fill()
 		return &s, nil
 	}
-	// Refresh first if the session is within the expiry margin; this may
-	// need rotateMu, so it must happen before taking it.
-	if _, _, err := m.mfaSession(ctx); err != nil {
-		return nil, err
+	if m.token != "" {
+		return verify(ctx, m.token)
 	}
-	c := m.c
-	c.rotateMu.Lock()
-	basis, err := c.loadSession(ctx)
-	if err != nil || basis == nil {
-		c.rotateMu.Unlock()
-		if err == nil {
-			err = ErrSessionMissing
+	var out *Session
+	err := m.c.lockedSessionOp(ctx, true, func(ctx context.Context, stored *Session) error {
+		s, err := verify(ctx, stored.AccessToken)
+		if err != nil {
+			return err
 		}
-		return nil, err
-	}
-	err = c.request(ctx, &transport.Request{Method: http.MethodPost, Path: path, Body: body, Token: basis.AccessToken}, &s)
-	if err != nil {
-		c.rotateMu.Unlock()
-		return nil, err
-	}
-	fill()
-	stored, err := c.replaceSessionIfCurrentQueued(ctx, basisOf(basis), &s, EventMFAChallengeVerified)
-	c.rotateMu.Unlock()
-	if stored {
-		c.deliverEvents()
-	}
+		if s.AccessToken != "" && s.RefreshToken != "" {
+			if err := m.c.commitLocked(ctx, s, EventMFAChallengeVerified); err != nil {
+				return err
+			}
+		}
+		out = s
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &s, nil
+	return out, nil
 }
 
 func mfaRequire(value, name string) error {

@@ -176,7 +176,29 @@ func (c *Client) removePKCEVerifier(ctx context.Context, flowID string) {
 	c.pkceMu.Lock()
 	defer c.pkceMu.Unlock()
 	if flowID == "" {
+		// The legacy key mirrors the most recent flow: remove that flow's
+		// slot and index entry too, so nothing is left behind.
+		legacy, _ := c.getJSONString(ctx, c.pkceLegacyKey())
 		_ = c.storage.RemoveItem(ctx, c.pkceLegacyKey())
+		if legacy == "" {
+			return
+		}
+		index := c.pkceIndex(ctx)
+		remaining := make([]string, 0, len(index))
+		for _, id := range index {
+			if v, _ := c.getJSONString(ctx, c.pkceSlotKey(id)); v == legacy {
+				_ = c.storage.RemoveItem(ctx, c.pkceSlotKey(id))
+				continue
+			}
+			remaining = append(remaining, id)
+		}
+		if len(remaining) != len(index) {
+			if len(remaining) > 0 {
+				_ = c.setJSON(ctx, c.pkceIndexKey(), remaining)
+			} else {
+				_ = c.storage.RemoveItem(ctx, c.pkceIndexKey())
+			}
+		}
 		return
 	}
 	slotValue, _ := c.getJSONString(ctx, c.pkceSlotKey(flowID))

@@ -110,30 +110,29 @@ func (c *Client) sessionFromImplicitGrant(ctx context.Context, params map[string
 	if issuedAt := expiresAt - expiresIn; now-issuedAt >= 120 {
 		c.debug(ctx, "session in URL was issued over 120s ago, URL could be stale")
 	}
-	user, err := c.fetchUser(ctx, accessToken)
-	if err != nil {
-		return nil, err
+	build := func() (*AuthResponse, error) {
+		user, err := c.fetchUser(ctx, accessToken)
+		if err != nil {
+			return nil, err
+		}
+		s := &Session{
+			AccessToken:          accessToken,
+			RefreshToken:         refreshToken,
+			TokenType:            params["token_type"],
+			ExpiresIn:            expiresIn,
+			ExpiresAt:            expiresAt,
+			ProviderToken:        params["provider_token"],
+			ProviderRefreshToken: params["provider_refresh_token"],
+			User:                 user,
+		}
+		return &AuthResponse{User: user, Session: s, RedirectType: params["type"]}, nil
 	}
-	s := &Session{
-		AccessToken:          accessToken,
-		RefreshToken:         refreshToken,
-		TokenType:            params["token_type"],
-		ExpiresIn:            expiresIn,
-		ExpiresAt:            expiresAt,
-		ProviderToken:        params["provider_token"],
-		ProviderRefreshToken: params["provider_refresh_token"],
-		User:                 user,
-	}
-	resp := &AuthResponse{User: user, Session: s, RedirectType: params["type"]}
 	if noStore {
-		return resp, nil
+		return build()
 	}
 	event := EventSignedIn
 	if params["type"] == OTPTypeRecovery {
 		event = EventPasswordRecovery
 	}
-	if err := c.commitSession(ctx, s, event); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return c.lockedSignIn(ctx, event, build)
 }
