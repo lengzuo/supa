@@ -161,9 +161,13 @@ func New(cfg Config) (*Client, error) {
 	for _, ed := range cfg.RequestEditors {
 		editors = append(editors, ed)
 	}
-	headers := cfg.Headers.Clone()
-	if headers == nil {
-		headers = http.Header{}
+	// Keep a canonicalized copy (not the caller's map) so lookups such as
+	// Get("Authorization") also see keys set as e.g. "authorization".
+	headers := http.Header{}
+	for k, vs := range cfg.Headers {
+		for _, v := range vs {
+			headers.Add(k, v)
+		}
 	}
 	if headers.Get(APIVersionHeader) == "" {
 		headers.Set(APIVersionHeader, APIVersion)
@@ -183,6 +187,7 @@ func New(cfg Config) (*Client, error) {
 	if cfg.FlowType == "" {
 		cfg.FlowType = FlowImplicit
 	}
+	cfg.Headers = headers.Clone()
 	c := &Client{
 		t:          t,
 		cfg:        cfg,

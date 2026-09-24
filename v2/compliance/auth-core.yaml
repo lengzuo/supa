@@ -90,7 +90,7 @@ features:
   auth.session.get_user:
     status: implemented
     symbols: [auth.Client.GetUser]
-    tests: [TestGetUser, TestGetUserSessionNotFoundKeepsNewerSession]
+    tests: [TestGetUser, TestGetUserSessionNotFoundKeepsNewerSession, TestToError, TestLowercaseAuthorizationHeader]
     reason: ""
   auth.session.refresh_session:
     status: implemented
@@ -141,7 +141,7 @@ features:
   auth.identities.unlink_identity:
     status: implemented
     symbols: [auth.Client.UnlinkIdentity]
-    tests: [TestUnlinkIdentity]
+    tests: [TestUnlinkIdentity, TestPathSegmentEscaping]
     reason: ""
 
   auth.passkey.register_passkey:
@@ -173,7 +173,7 @@ features:
   client.session_management.custom_storage:
     status: implemented
     symbols: [auth.SessionStorage, auth.Config]
-    tests: [TestCustomStorage, TestMemoryStorageZeroValue]
+    tests: [TestCustomStorage, TestMemoryStorageZeroValue, TestUserJSONRoundTrip]
     reason: ""
   client.session_management.persist_session:
     status: implemented

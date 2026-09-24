@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"time"
 )
 
@@ -173,7 +172,7 @@ func (p *PasskeyAPI) Update(ctx context.Context, accessToken string, params Pass
 	}
 	body := map[string]string{"friendly_name": params.FriendlyName}
 	var out Passkey
-	if err := p.c.call(ctx, http.MethodPatch, "/passkeys/"+url.PathEscape(params.PasskeyID), nil, token, body, &out); err != nil {
+	if err := p.c.call(ctx, http.MethodPatch, "/passkeys/"+pathSegment(params.PasskeyID), nil, token, body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -188,5 +187,5 @@ func (p *PasskeyAPI) Delete(ctx context.Context, accessToken, passkeyID string) 
 	if err != nil {
 		return err
 	}
-	return p.c.call(ctx, http.MethodDelete, "/passkeys/"+url.PathEscape(passkeyID), nil, token, nil, nil)
+	return p.c.call(ctx, http.MethodDelete, "/passkeys/"+pathSegment(passkeyID), nil, token, nil, nil)
 }

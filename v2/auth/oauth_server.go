@@ -118,7 +118,7 @@ func oauthAuthorizationPath(authorizationID string) (string, error) {
 	if strings.TrimSpace(authorizationID) == "" {
 		return "", fmt.Errorf("%w: authorization ID is required", ErrInvalidArgument)
 	}
-	return "/oauth/authorizations/" + url.PathEscape(authorizationID), nil
+	return "/oauth/authorizations/" + pathSegment(authorizationID), nil
 }
 
 // GetAuthorizationDetails returns the details of an authorization request,

@@ -10,6 +10,9 @@ import (
 // aal2 when they cannot use their other factors. Obtain one with
 // MFAAPI.RecoveryCodes.
 //
+// Experimental: this API mirrors an experimental auth-js API
+// (experimental.recoveryCodes) and may change in a future release.
+//
 // This API is experimental on the server and must be enabled in the
 // project's Auth settings; calls fail with an *Error otherwise.
 //
@@ -18,7 +21,8 @@ type MFARecoveryCodesAPI struct {
 	m *MFAAPI
 }
 
-// RecoveryCodes returns the recovery codes API. It authenticates the same
+// RecoveryCodes returns the recovery codes API (experimental, see
+// MFARecoveryCodesAPI). It authenticates the same
 // way as m (stored session, or the token given to WithAccessToken).
 func (m *MFAAPI) RecoveryCodes() *MFARecoveryCodesAPI { return &MFARecoveryCodesAPI{m: m} }
 

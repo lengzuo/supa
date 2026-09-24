@@ -27,7 +27,7 @@ features:
   auth.admin.generate_link:
     status: implemented
     symbols: [auth.AdminAPI.GenerateLink]
-    tests: [TestAdminGenerateLink]
+    tests: [TestAdminGenerateLink, TestAdminGenerateLinkStripsSecretsFromUser, TestAdminEmptyUserBody]
     reason: ""
   auth.admin.get_provider:
     status: implemented
@@ -77,7 +77,7 @@ features:
   auth.oauth_admin.create_client:
     status: implemented
     symbols: [auth.AdminAPI.OAuth, auth.AdminOAuthAPI.CreateClient]
-    tests: [TestAdminOAuthCreateClient]
+    tests: [TestAdminOAuthCreateClient, TestAdminCreateOAuthClientOmitsEmptyRedirectURIs]
     reason: ""
   auth.oauth_admin.delete_client:
     status: implemented

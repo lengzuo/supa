@@ -134,7 +134,7 @@ func adminProviderPath(identifier string) (string, error) {
 	if identifier == "" {
 		return "", fmt.Errorf("%w: provider identifier is required", ErrInvalidArgument)
 	}
-	return "/admin/custom-providers/" + url.PathEscape(identifier), nil
+	return "/admin/custom-providers/" + pathSegment(identifier), nil
 }
 
 // ListProviders returns the custom providers. params may be nil.

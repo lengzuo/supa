@@ -23,8 +23,11 @@ type Error struct {
 	Code string
 	// WeakPasswordReasons is set when Code is ErrorCodeWeakPassword.
 	WeakPasswordReasons []string
-	// Retryable reports whether the failure was an infrastructure error
-	// (5xx or network) that may succeed if retried.
+	// Retryable reports whether the server answered with an
+	// infrastructure error (5xx, Cloudflare 52x) that may succeed if
+	// retried. It only describes HTTP responses: network failures and
+	// context errors are returned as-is (not as *Error) and are equally
+	// transient.
 	Retryable bool
 	// RedirectError is the "error" parameter (e.g. "access_denied") of a
 	// redirect URL rejected by GetSessionFromURL; Code then holds its
@@ -48,11 +51,16 @@ func (e *Error) Error() string {
 	}
 }
 
-// Is lets errors.Is match an *Error against the sentinel errors below by Code.
+// Is lets errors.Is match an *Error against the sentinel errors below (or
+// any *Error with a Code) by Code. A server session_not_found error also
+// matches ErrSessionMissing, like auth-js AuthSessionMissingError.
 func (e *Error) Is(target error) bool {
 	t, ok := target.(*Error)
 	if !ok || t.Code == "" {
 		return false
+	}
+	if t.Code == ErrSessionMissing.Code && e.Code == ErrorCodeSessionNotFound {
+		return true
 	}
 	return e.Code == t.Code || (e.kind != "" && e.kind == t.Code)
 }
@@ -77,7 +85,9 @@ const (
 	ErrorCodeIdentityNotFound      = "identity_not_found"
 )
 
-// Sentinel errors for client-side failures. Match with errors.Is.
+// Sentinel errors for client-side failures. Match with errors.Is (which
+// compares codes, so returned errors may carry a more specific message).
+// The sentinels are shared values: never modify their fields.
 var (
 	// ErrSessionMissing is returned when an operation needs a stored
 	// session and none is present.
@@ -151,9 +161,14 @@ var networkErrorCodes = map[int]bool{
 // codes in the "code" field.
 var apiVersion20240101 = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// toError converts transport errors into *Error. Non-HTTP errors (context
-// cancellation, network failures) are returned wrapped so errors.Is still
-// works on them.
+// maxErrorBodyMessage bounds how much of a non-JSON error body becomes
+// the error message.
+const maxErrorBodyMessage = 512
+
+// toError converts transport errors into *Error, mirroring auth-js
+// handleError. Non-HTTP errors (context cancellation, network failures,
+// pre-send failures) are returned unchanged so errors.Is still works on
+// them; isRetryable treats them as retryable except pre-send failures.
 func toError(err error) error {
 	if err == nil {
 		return nil
@@ -162,50 +177,87 @@ func toError(err error) error {
 	if !errors.As(err, &he) {
 		return err
 	}
-	var body struct {
-		Code             json.RawMessage `json:"code"`
-		ErrorCode        string          `json:"error_code"`
-		Msg              string          `json:"msg"`
-		Message          string          `json:"message"`
-		ErrorDescription string          `json:"error_description"`
-		Error            string          `json:"error"`
-		WeakPassword     *struct {
-			Reasons []string `json:"reasons"`
-		} `json:"weak_password"`
-	}
 	out := &Error{StatusCode: he.StatusCode, Retryable: networkErrorCodes[he.StatusCode]}
-	if jerr := json.Unmarshal(he.Body, &body); jerr != nil {
-		out.Message = http.StatusText(he.StatusCode)
-		if len(he.Body) > 0 && !out.Retryable {
-			out.Message = string(he.Body)
+
+	// Decode field by field so one badly typed field does not lose the
+	// others.
+	var fields map[string]json.RawMessage
+	if jerr := json.Unmarshal(he.Body, &fields); jerr != nil {
+		var anyJSON any
+		switch {
+		case json.Unmarshal(he.Body, &anyJSON) == nil:
+			// Valid JSON that is not an object (auth-js: JSON.stringify).
+			out.Message = truncateMessage(string(he.Body))
+		case out.Retryable || len(he.Body) == 0:
+			out.Message = httpStatusMessage(he.StatusCode)
+		default:
+			out.Message = truncateMessage(string(he.Body))
 		}
 		return out
 	}
-	switch {
-	case body.Msg != "":
-		out.Message = body.Msg
-	case body.Message != "":
-		out.Message = body.Message
-	case body.ErrorDescription != "":
-		out.Message = body.ErrorDescription
-	case body.Error != "":
-		out.Message = body.Error
-	default:
-		out.Message = string(he.Body)
+	str := func(key string) string {
+		var v string
+		if raw, ok := fields[key]; ok && json.Unmarshal(raw, &v) == nil {
+			return v
+		}
+		return ""
 	}
-	var code string
+	for _, key := range []string{"msg", "message", "error_description", "error"} {
+		if v := str(key); v != "" {
+			out.Message = v
+			break
+		}
+	}
+	if out.Message == "" {
+		out.Message = truncateMessage(string(he.Body))
+	}
+	if out.Retryable {
+		// Infrastructure failure: like auth-js AuthRetryableFetchError, no
+		// error code is extracted.
+		return out
+	}
+	code := ""
 	if v := he.Header.Get(APIVersionHeader); v != "" {
 		if t, err := time.Parse("2006-01-02", v); err == nil && !t.Before(apiVersion20240101) {
-			_ = json.Unmarshal(body.Code, &code)
+			code = str("code")
 		}
 	}
 	if code == "" {
-		code = body.ErrorCode
+		code = str("error_code")
 	}
 	out.Code = code
-	if body.WeakPassword != nil && (code == ErrorCodeWeakPassword || (code == "" && len(body.WeakPassword.Reasons) > 0)) {
+	var weak struct {
+		Reasons []string `json:"reasons"`
+	}
+	hasWeak := false
+	if raw, ok := fields["weak_password"]; ok && json.Unmarshal(raw, &weak) == nil && weak.Reasons != nil {
+		hasWeak = true
+	}
+	switch {
+	case code == ErrorCodeWeakPassword:
+		out.WeakPasswordReasons = weak.Reasons
+		if out.WeakPasswordReasons == nil {
+			out.WeakPasswordReasons = []string{}
+		}
+	case code == "" && hasWeak && len(weak.Reasons) > 0:
 		out.Code = ErrorCodeWeakPassword
-		out.WeakPasswordReasons = body.WeakPassword.Reasons
+		out.WeakPasswordReasons = weak.Reasons
 	}
 	return out
+}
+
+// httpStatusMessage is the status text, or "HTTP <status>" for codes Go
+// does not name (e.g. Cloudflare's 520-530).
+func httpStatusMessage(status int) string {
+	if t := http.StatusText(status); t != "" {
+		return t
+	}
+	return fmt.Sprintf("HTTP %d", status)
+}
+
+func truncateMessage(s string) string {
+	if len(s) > maxErrorBodyMessage {
+		return s[:maxErrorBodyMessage]
+	}
+	return s
 }
