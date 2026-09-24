@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Version is the SDK version reported in the X-Client-Info header.
@@ -109,8 +110,13 @@ type Client struct {
 }
 
 // DefaultHTTPClient returns the HTTP client used when none is configured.
+// It sets no overall request timeout, because that would also bound
+// streaming uploads and downloads. Callers bound requests with their
+// context or Config.Timeout. Connection setup is bounded by the transport.
 func DefaultHTTPClient() *http.Client {
-	return &http.Client{Timeout: 60 * time.Second}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = 60 * time.Second
+	return &http.Client{Transport: tr}
 }
 
 // New validates cfg and returns a Client. cfg is copied; later changes to
@@ -126,22 +132,44 @@ func New(cfg Config) (*Client, error) {
 	if u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("transport: base URL %q must be absolute", cfg.BaseURL)
 	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("transport: base URL %q must not have a query or fragment", cfg.BaseURL)
+	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = DefaultHTTPClient()
 	}
-	cfg.Headers = cfg.Headers.Clone()
+	cfg.Headers = canonicalHeader(cfg.Headers)
 	cfg.Editors = append([]RequestEditor(nil), cfg.Editors...)
+	cfg.Retry = cfg.Retry.clone()
 	return &Client{base: u, cfg: cfg}, nil
+}
+
+// canonicalHeader returns a deep copy of h with canonical keys, so that
+// "apikey" and "Apikey" can never both be sent.
+func canonicalHeader(h http.Header) http.Header {
+	out := make(http.Header, len(h))
+	for k, vs := range h {
+		ck := http.CanonicalHeaderKey(k)
+		out[ck] = append(out[ck], vs...)
+	}
+	return out
+}
+
+func (p *RetryPolicy) clone() *RetryPolicy {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.Methods = append([]string(nil), p.Methods...)
+	cp.StatusCodes = append([]int(nil), p.StatusCodes...)
+	return &cp
 }
 
 // With returns a copy of c whose Config has been modified by fn. The
 // receiver is not changed. Use it to derive clients with a different
 // token, schema header or base path.
 func (c *Client) With(fn func(cfg *Config)) (*Client, error) {
-	cfg := c.cfg
-	cfg.Headers = cfg.Headers.Clone()
-	cfg.Editors = append([]RequestEditor(nil), cfg.Editors...)
-	cfg.BaseURL = c.base.String()
+	cfg := c.Config()
 	fn(&cfg)
 	return New(cfg)
 }
@@ -149,8 +177,9 @@ func (c *Client) With(fn func(cfg *Config)) (*Client, error) {
 // Config returns a copy of the client's configuration.
 func (c *Client) Config() Config {
 	cfg := c.cfg
-	cfg.Headers = cfg.Headers.Clone()
+	cfg.Headers = canonicalHeader(cfg.Headers)
 	cfg.Editors = append([]RequestEditor(nil), cfg.Editors...)
+	cfg.Retry = cfg.Retry.clone()
 	cfg.BaseURL = c.base.String()
 	return cfg
 }
@@ -162,9 +191,12 @@ func (c *Client) BaseURL() *url.URL {
 }
 
 // URL resolves path (which may contain a query) against the base URL.
-// path segments supplied by users must already be escaped by the caller
-// (see PathEscape).
-func (c *Client) URL(path string, query url.Values) string {
+// Path segments supplied by users must already be escaped by the caller
+// (see PathEscape). A query string in path is kept verbatim (order and
+// encoding preserved); query values are encoded and appended after it.
+// It returns an error if the query in path is malformed, so that a filter
+// can never be silently dropped.
+func (c *Client) URL(path string, query url.Values) (string, error) {
 	u := *c.base
 	p, rawQuery, _ := strings.Cut(path, "?")
 	if p != "" && !strings.HasPrefix(p, "/") {
@@ -176,14 +208,17 @@ func (c *Client) URL(path string, query url.Values) string {
 	} else {
 		u.Path, u.RawPath = raw, ""
 	}
-	q, _ := url.ParseQuery(rawQuery)
-	for k, vs := range query {
-		for _, v := range vs {
-			q.Add(k, v)
-		}
+	if _, err := url.ParseQuery(rawQuery); err != nil {
+		return "", fmt.Errorf("transport: malformed query in path: %w", err)
 	}
-	u.RawQuery = q.Encode()
-	return u.String()
+	if extra := query.Encode(); extra != "" {
+		if rawQuery != "" {
+			rawQuery += "&"
+		}
+		rawQuery += extra
+	}
+	u.RawQuery = rawQuery
+	return u.String(), nil
 }
 
 // PathEscape escapes each "/"-separated segment of p, keeping the slashes.
@@ -191,7 +226,14 @@ func (c *Client) URL(path string, query url.Values) string {
 func PathEscape(p string) string {
 	parts := strings.Split(p, "/")
 	for i, s := range parts {
-		parts[i] = url.PathEscape(s)
+		switch s {
+		case ".":
+			parts[i] = "%2E"
+		case "..":
+			parts[i] = "%2E%2E"
+		default:
+			parts[i] = url.PathEscape(s)
+		}
 	}
 	return strings.Join(parts, "/")
 }
@@ -229,6 +271,9 @@ func (e *HTTPError) Error() string {
 	body := e.Body
 	if len(body) > 512 {
 		body = body[:512]
+		for len(body) > 0 && !utf8.Valid(body) {
+			body = body[:len(body)-1]
+		}
 	}
 	return fmt.Sprintf("supabase: HTTP %d: %s", e.StatusCode, strings.TrimSpace(string(body)))
 }
@@ -244,6 +289,9 @@ func (c *Client) Do(ctx context.Context, req *Request) (*http.Response, error) {
 	if ctx == nil {
 		return nil, errors.New("transport: nil context")
 	}
+	if req == nil {
+		return nil, errors.New("transport: nil request")
+	}
 	method := req.Method
 	if method == "" {
 		method = http.MethodGet
@@ -252,7 +300,10 @@ func (c *Client) Do(ctx context.Context, req *Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	fullURL := c.URL(req.Path, req.Query)
+	fullURL, err := c.URL(req.Path, req.Query)
+	if err != nil {
+		return nil, err
+	}
 
 	policy := c.cfg.Retry
 	attempts := 1
@@ -262,12 +313,12 @@ func (c *Client) Do(ctx context.Context, req *Request) (*http.Response, error) {
 
 	for attempt := 1; ; attempt++ {
 		resp, err := c.once(ctx, method, fullURL, req, body, contentType)
-		if attempt >= attempts || !shouldRetry(policy, resp, err, ctx) {
+		if attempt >= attempts || !shouldRetry(ctx, policy, resp, err) {
 			return resp, err
 		}
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		if err := sleep(ctx, backoff(policy, attempt, resp)); err != nil {
 			return nil, err
@@ -319,18 +370,23 @@ func (c *Client) send(ctx context.Context, method, fullURL string, req *Request,
 		h[k] = append([]string(nil), vs...)
 	}
 	for k, vs := range req.Header {
-		h[k] = append([]string(nil), vs...)
+		h[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
 	}
-	if h.Get(HeaderAuthorization) == "" {
-		token := req.Token
-		if token == "" && c.cfg.Token != nil {
+	// Precedence for Authorization: an explicit per-request Token wins
+	// (like auth-js's jwt option), then any Authorization header set on
+	// the client or request, then the TokenFunc, then the API key.
+	if req.Token != "" {
+		h.Set(HeaderAuthorization, "Bearer "+req.Token)
+	} else if h.Get(HeaderAuthorization) == "" {
+		var token string
+		if c.cfg.Token != nil {
 			token, err = c.cfg.Token(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("transport: access token: %w", err)
 			}
 		}
 		if token == "" && c.cfg.AllowKeyAsBearer && c.cfg.APIKey != "" &&
-			!(c.cfg.KeyAsBearerLegacyOnly && IsNewAPIKey(c.cfg.APIKey)) {
+			(!c.cfg.KeyAsBearerLegacyOnly || !IsNewAPIKey(c.cfg.APIKey)) {
 			token = c.cfg.APIKey
 		}
 		if token != "" {
@@ -345,7 +401,13 @@ func (c *Client) send(ctx context.Context, method, fullURL string, req *Request,
 
 	start := time.Now()
 	resp, err := c.cfg.HTTPClient.Do(httpReq)
-	if c.cfg.Logger != nil {
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			ue.URL = redactURL(httpReq.URL)
+		}
+	}
+	if c.cfg.Logger != nil && c.cfg.Logger.Enabled(ctx, slog.LevelDebug) {
 		logURL := redactURL(httpReq.URL)
 		if err != nil {
 			c.cfg.Logger.LogAttrs(ctx, slog.LevelDebug, "supabase request failed",
@@ -369,7 +431,7 @@ func (c *Client) DoJSON(ctx context.Context, req *Request, out any) (http.Header
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp.Header, fmt.Errorf("transport: read response: %w", err)
@@ -396,7 +458,7 @@ func CheckResponse(resp *http.Response) error {
 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return &HTTPError{StatusCode: resp.StatusCode, Header: resp.Header, Body: data}
 }
@@ -437,12 +499,15 @@ func methodAllowed(p *RetryPolicy, method string) bool {
 	return false
 }
 
-func shouldRetry(p *RetryPolicy, resp *http.Response, err error, ctx context.Context) bool {
+// shouldRetry reports whether another attempt should be made. ctx is the
+// caller's context: once it is done nothing is retried, but a per-attempt
+// Config.Timeout expiring counts as a retryable network error.
+func shouldRetry(ctx context.Context, p *RetryPolicy, resp *http.Response, err error) bool {
 	if p == nil || ctx.Err() != nil {
 		return false
 	}
 	if err != nil {
-		return p.RetryNetworkErrors && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+		return p.RetryNetworkErrors && !errors.Is(err, context.Canceled)
 	}
 	codes := p.StatusCodes
 	if len(codes) == 0 {
@@ -457,19 +522,25 @@ func shouldRetry(p *RetryPolicy, resp *http.Response, err error, ctx context.Con
 }
 
 func backoff(p *RetryPolicy, attempt int, resp *http.Response) time.Duration {
-	if resp != nil {
-		if s := resp.Header.Get("Retry-After"); s != "" {
-			if secs, err := strconv.Atoi(s); err == nil && secs >= 0 && secs <= 60 {
-				return time.Duration(secs) * time.Second
-			}
-		}
-	}
 	base, maxDelay := p.BaseDelay, p.MaxDelay
 	if base <= 0 {
 		base = 100 * time.Millisecond
 	}
 	if maxDelay <= 0 {
 		maxDelay = 5 * time.Second
+	}
+	if resp != nil {
+		if s := resp.Header.Get("Retry-After"); s != "" {
+			var d time.Duration
+			if secs, err := strconv.Atoi(s); err == nil && secs >= 0 {
+				d = time.Duration(secs) * time.Second
+			} else if t, err := http.ParseTime(s); err == nil {
+				d = time.Until(t)
+			}
+			if d > 0 {
+				return min(d, maxDelay)
+			}
+		}
 	}
 	d := base << (attempt - 1)
 	if d <= 0 || d > maxDelay {
@@ -491,20 +562,26 @@ func sleep(ctx context.Context, d time.Duration) error {
 }
 
 // sensitiveQueryKeys are redacted from logged URLs.
-var sensitiveQueryKeys = []string{"apikey", "token", "access_token", "refresh_token", "code", "code_verifier", "token_hash"}
+var sensitiveQueryKeys = map[string]bool{
+	"apikey": true, "token": true, "access_token": true, "refresh_token": true,
+	"code": true, "code_verifier": true, "token_hash": true, "password": true,
+	"jwt": true, "signature": true,
+}
 
 func redactURL(u *url.URL) string {
 	cp := *u
 	q := cp.Query()
 	changed := false
-	for _, k := range sensitiveQueryKeys {
-		if q.Has(k) {
-			q.Set(k, "REDACTED")
+	for k := range q {
+		if sensitiveQueryKeys[strings.ToLower(k)] {
+			q[k] = []string{"REDACTED"}
 			changed = true
 		}
 	}
 	if changed {
 		cp.RawQuery = q.Encode()
+	} else if _, err := url.ParseQuery(cp.RawQuery); err != nil {
+		cp.RawQuery = "REDACTED"
 	}
 	cp.User = nil
 	return cp.String()

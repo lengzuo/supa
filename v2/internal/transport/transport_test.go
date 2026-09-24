@@ -53,7 +53,7 @@ func TestDefaultHeadersAndKeyFallback(t *testing.T) {
 		if r.URL.Path != "/auth/v1/user" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		w.Write([]byte(`{"id":"u1"}`))
+		_, _ = w.Write([]byte(`{"id":"u1"}`))
 	}, nil)
 	var out struct{ ID string }
 	if _, err := c.DoJSON(context.Background(), &Request{Path: "/user"}, &out); err != nil {
@@ -141,7 +141,10 @@ func TestConfigIsCopied(t *testing.T) {
 
 func TestURL(t *testing.T) {
 	c, _ := New(Config{BaseURL: "https://x.supabase.co/storage/v1/"})
-	got := c.URL("object/b/"+PathEscape("a dir/f#1.png")+"?download=1", map[string][]string{"x": {"y"}})
+	got, err := c.URL("object/b/"+PathEscape("a dir/f#1.png")+"?download=1", map[string][]string{"x": {"y"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "https://x.supabase.co/storage/v1/object/b/a%20dir/f%231.png?download=1&x=y"
 	if got != want {
 		t.Fatalf("URL = %q, want %q", got, want)
@@ -151,7 +154,7 @@ func TestURL(t *testing.T) {
 func TestHTTPError(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"msg":"bad"}`))
+		_, _ = w.Write([]byte(`{"msg":"bad"}`))
 	}, nil)
 	_, err := c.DoJSON(context.Background(), &Request{Path: "/"}, nil)
 	var he *HTTPError
@@ -163,7 +166,7 @@ func TestHTTPError(t *testing.T) {
 func TestJSONBodyAndRawBody(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		w.Write([]byte(r.Header.Get("Content-Type") + "|" + string(b)))
+		_, _ = w.Write([]byte(r.Header.Get("Content-Type") + "|" + string(b)))
 	}, nil)
 	var out []byte
 	if _, err := c.DoJSON(context.Background(), &Request{Method: "POST", Path: "/", Body: map[string]int{"a": 1}}, &out); err != nil {
@@ -188,7 +191,7 @@ func TestRetry(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	}, func(cfg *Config) { cfg.Retry = &RetryPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond} })
 	if _, err := c.DoJSON(context.Background(), &Request{Path: "/"}, nil); err != nil {
 		t.Fatal(err)
@@ -233,5 +236,125 @@ func TestLogsAreRedacted(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "status=200") {
 		t.Errorf("log missing status: %s", buf.String())
+	}
+}
+
+// Review finding: an explicit per-request token must beat a client-level
+// Authorization header (auth-js jwt option semantics).
+func TestRequestTokenBeatsClientAuthorizationHeader(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Values("Authorization"); len(got) != 1 || got[0] != "Bearer USER" {
+			t.Errorf("Authorization = %q", got)
+		}
+	}, func(cfg *Config) { cfg.Headers = http.Header{"authorization": {"Bearer SERVICE"}} })
+	if _, err := c.DoJSON(context.Background(), &Request{Path: "/", Token: "USER"}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Review finding: non-canonical header keys must not produce duplicates.
+func TestNonCanonicalHeaderKeysDoNotDuplicate(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Values("Apikey"); len(got) != 1 || got[0] != "override" {
+			t.Errorf("apikey = %q", got)
+		}
+		if got := r.Header.Values("Authorization"); len(got) != 1 || got[0] != "Bearer req" {
+			t.Errorf("Authorization = %q", got)
+		}
+	}, func(cfg *Config) {
+		cfg.Headers = http.Header{"apikey": {"override"}, "authorization": {"Bearer global"}}
+	})
+	req := &Request{Path: "/", Header: http.Header{"authorization": {"Bearer req"}}}
+	if _, err := c.DoJSON(context.Background(), req, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Review finding: network errors must not expose secrets from the URL.
+func TestNetworkErrorIsRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	c, err := New(Config{
+		BaseURL: "http://127.0.0.1:1",
+		Logger:  slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.DoJSON(context.Background(), &Request{Path: "/verify?token=SECRET123&Refresh_Token=RT"}, nil)
+	if err == nil {
+		t.Fatal("expected a network error")
+	}
+	for _, s := range []string{"SECRET123", "RT&", "=RT"} {
+		if strings.Contains(err.Error(), s) || strings.Contains(buf.String(), s) {
+			t.Errorf("secret %q leaked: err=%v log=%s", s, err, buf.String())
+		}
+	}
+}
+
+// Review finding: dot segments must not allow path traversal.
+func TestPathEscapeDotSegments(t *testing.T) {
+	c, _ := New(Config{BaseURL: "https://x.supabase.co/storage/v1"})
+	got, err := c.URL("/object/b/"+PathEscape("../../../auth/v1/admin/users"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "/../") || !strings.Contains(got, "%2E%2E") {
+		t.Fatalf("URL = %q", got)
+	}
+}
+
+// Review finding: queries must be preserved verbatim and malformed ones rejected.
+func TestURLQueryHandling(t *testing.T) {
+	c, _ := New(Config{BaseURL: "https://x.supabase.co/rest/v1"})
+	got, err := c.URL("/t?select=*,x(y)&id=eq.1", map[string][]string{"limit": {"1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://x.supabase.co/rest/v1/t?select=*,x(y)&id=eq.1&limit=1"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	for _, bad := range []string{"/t?a=1;b=2", "/t?a=%zz"} {
+		if _, err := c.URL(bad, nil); err == nil {
+			t.Errorf("URL(%q) accepted a malformed query", bad)
+		}
+	}
+	if _, err := New(Config{BaseURL: "https://x.supabase.co/rest/v1?keep=1"}); err == nil {
+		t.Error("base URL with query accepted")
+	}
+}
+
+// Review finding: a per-attempt Timeout is retryable; the caller's deadline is not.
+func TestPerAttemptTimeoutIsRetried(t *testing.T) {
+	var calls atomic.Int32
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			<-r.Context().Done()
+			return
+		}
+	}, func(cfg *Config) {
+		cfg.Timeout = 50 * time.Millisecond
+		cfg.Retry = &RetryPolicy{MaxAttempts: 3, RetryNetworkErrors: true, BaseDelay: time.Millisecond}
+	})
+	if _, err := c.DoJSON(context.Background(), &Request{Path: "/"}, nil); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d", calls.Load())
+	}
+}
+
+func TestRetryPolicyIsCopied(t *testing.T) {
+	p := &RetryPolicy{MaxAttempts: 2}
+	c, _ := New(Config{BaseURL: "https://x.supabase.co", Retry: p})
+	p.MaxAttempts = 9
+	if c.Config().Retry.MaxAttempts != 2 {
+		t.Fatal("retry policy aliased caller's value")
+	}
+}
+
+func TestNilRequest(t *testing.T) {
+	c, _ := New(Config{BaseURL: "https://x.supabase.co"})
+	if _, err := c.Do(context.Background(), nil); err == nil {
+		t.Fatal("expected error")
 	}
 }
