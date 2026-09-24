@@ -1,0 +1,281 @@
+features:
+  database.configuration.auto_retry:
+    status: implemented
+    symbols: [postgrest.Config, postgrest.RetryPolicy, postgrest.FilterBuilder.Retry]
+    tests: [TestRetry, TestRetryPolicyDelay]
+    reason: ""
+  database.configuration.request_timeout:
+    status: implemented
+    symbols: [postgrest.Config]
+    tests: [TestRequestTimeout]
+    reason: ""
+  database.mutate.delete:
+    status: implemented
+    symbols: [postgrest.QueryBuilder.Delete, postgrest.DeleteOptions]
+    tests: [TestDelete, TestMaxAffected]
+    reason: ""
+  database.mutate.insert:
+    status: implemented
+    symbols: [postgrest.QueryBuilder.Insert, postgrest.InsertOptions]
+    tests: [TestInsert, TestInsertBulk]
+    reason: ""
+  database.mutate.select_after_mutation:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Select]
+    tests: [TestSelectAfterMutation, TestUpsert, TestRollback]
+    reason: ""
+  database.mutate.update:
+    status: implemented
+    symbols: [postgrest.QueryBuilder.Update, postgrest.UpdateOptions]
+    tests: [TestUpdate]
+    reason: ""
+  database.mutate.upsert:
+    status: implemented
+    symbols: [postgrest.QueryBuilder.Upsert, postgrest.UpsertOptions]
+    tests: [TestUpsert]
+    reason: ""
+  database.query.from_table:
+    status: implemented
+    symbols: [postgrest.New, postgrest.Client.From]
+    tests: [TestFromSelect, TestNewValidation]
+    reason: ""
+  database.query.openapi_spec:
+    status: implemented
+    symbols: [postgrest.Client.GetOpenAPISpec, postgrest.OpenAPISpec]
+    tests: [TestGetOpenAPISpec, TestGetOpenAPISpecErrors]
+    reason: ""
+  database.query.rpc:
+    status: implemented
+    symbols: [postgrest.Client.RPC, postgrest.RPCOptions]
+    tests: [TestRPC, TestRPCGetHead]
+    reason: ""
+  database.query.schema_selection:
+    status: implemented
+    symbols: [postgrest.Client.Schema, postgrest.Config]
+    tests: [TestSchemaSelection, TestGetOpenAPISpec]
+    reason: ""
+  database.query.select:
+    status: implemented
+    symbols: [postgrest.QueryBuilder.Select, postgrest.SelectOptions, postgrest.FilterBuilder.Select, postgrest.FilterBuilder.Execute, postgrest.FilterBuilder.ExecuteInto, postgrest.ExecuteTo]
+    tests: [TestFromSelect, TestSelectHeadCount, TestSelectCountRange, TestExecuteTo]
+    reason: ""
+  database.using_filters.contained_by:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.ContainedBy]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.contains:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Contains]
+    tests: [TestFilters, TestFilterErrors]
+    reason: ""
+  database.using_filters.eq:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Eq]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.gt:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Gt]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.gte:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Gte]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.ilike:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.ILike]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.ilike_all:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.ILikeAllOf]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.ilike_any:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.ILikeAnyOf]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.in:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.In]
+    tests: [TestFilters, TestFilterErrors]
+    reason: ""
+  database.using_filters.is:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Is]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.is_distinct:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.IsDistinct]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.like:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Like]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.like_all:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.LikeAllOf]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.like_any:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.LikeAnyOf]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.lt:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Lt]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.lte:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Lte]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.match:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Match]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.neq:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Neq]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.not:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Not]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.not_in:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.NotIn]
+    tests: [TestFilters, TestFilterErrors]
+    reason: ""
+  database.using_filters.or:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Or]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.overlaps:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Overlaps]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.range_adjacent:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.RangeAdjacent]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.range_gt:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.RangeGt]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.range_gte:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.RangeGte]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.range_lt:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.RangeLt]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.range_lte:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.RangeLte]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.raw:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Filter]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.regex:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.RegexMatch]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.regex_icase:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.RegexIMatch]
+    tests: [TestFilters]
+    reason: ""
+  database.using_filters.text_search:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.TextSearch]
+    tests: [TestFilters, TestFilterErrors]
+    reason: ""
+  database.using_modifiers.dry_run:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Rollback]
+    tests: [TestRollback]
+    reason: ""
+  database.using_modifiers.explain:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Explain, postgrest.ExplainOptions]
+    tests: [TestExplain]
+    reason: ""
+  database.using_modifiers.format_csv:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.CSV]
+    tests: [TestCSV]
+    reason: ""
+  database.using_modifiers.format_geojson:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.GeoJSON]
+    tests: [TestGeoJSON]
+    reason: ""
+  database.using_modifiers.limit:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Limit]
+    tests: [TestLimitRange, TestRelationshipEmbed]
+    reason: ""
+  database.using_modifiers.max_affected_rows:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.MaxAffected]
+    tests: [TestMaxAffected]
+    reason: ""
+  database.using_modifiers.maybe_single_row:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.MaybeSingle]
+    tests: [TestMaybeSingle]
+    reason: ""
+  database.using_modifiers.order:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Order, postgrest.OrderOptions]
+    tests: [TestOrder, TestRelationshipEmbed]
+    reason: ""
+  database.using_modifiers.range:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Range]
+    tests: [TestLimitRange]
+    reason: ""
+  database.using_modifiers.relationship_embed:
+    status: implemented
+    symbols: [postgrest.QueryBuilder.Select, postgrest.FilterBuilder.Select, postgrest.TableOptions]
+    tests: [TestRelationshipEmbed]
+    reason: ""
+  database.using_modifiers.request_cancellation:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Execute]
+    tests: [TestRequestCancellation]
+    reason: ""
+  database.using_modifiers.single_row:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.Single]
+    tests: [TestSingle]
+    reason: ""
+  database.using_modifiers.strip_nulls:
+    status: implemented
+    symbols: [postgrest.FilterBuilder.StripNulls]
+    tests: [TestStripNulls]
+    reason: ""
