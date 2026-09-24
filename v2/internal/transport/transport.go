@@ -284,6 +284,22 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("supabase: HTTP %d: %s", e.StatusCode, strings.TrimSpace(string(body)))
 }
 
+// PreSendError wraps a failure that happened before the request was sent
+// (access-token callback, request editor, request construction). Such
+// errors are never transient network failures and must not be retried.
+type PreSendError struct{ Err error }
+
+func (e *PreSendError) Error() string { return e.Err.Error() }
+
+// Unwrap returns the underlying error.
+func (e *PreSendError) Unwrap() error { return e.Err }
+
+// IsPreSend reports whether err happened before the request was sent.
+func IsPreSend(err error) bool {
+	var pe *PreSendError
+	return errors.As(err, &pe)
+}
+
 // IsNewAPIKey reports whether key is a new-format, non-JWT API key.
 func IsNewAPIKey(key string) bool {
 	return strings.HasPrefix(key, "sb_publishable_") || strings.HasPrefix(key, "sb_secret_")
@@ -362,7 +378,7 @@ func (c *Client) send(ctx context.Context, method, fullURL string, req *Request,
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, fullURL, rdr)
 	if err != nil {
-		return nil, fmt.Errorf("transport: build request: %w", err)
+		return nil, &PreSendError{Err: fmt.Errorf("transport: build request: %w", err)}
 	}
 	h := httpReq.Header
 	h.Set(HeaderClientInfo, ClientInfo)
@@ -388,7 +404,7 @@ func (c *Client) send(ctx context.Context, method, fullURL string, req *Request,
 		if c.cfg.Token != nil {
 			token, err = c.cfg.Token(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("transport: access token: %w", err)
+				return nil, &PreSendError{Err: fmt.Errorf("transport: access token: %w", err)}
 			}
 		}
 		if token == "" && c.cfg.AllowKeyAsBearer && c.cfg.APIKey != "" &&
@@ -401,7 +417,7 @@ func (c *Client) send(ctx context.Context, method, fullURL string, req *Request,
 	}
 	for _, ed := range c.cfg.Editors {
 		if err := ed(httpReq); err != nil {
-			return nil, err
+			return nil, &PreSendError{Err: err}
 		}
 	}
 
@@ -513,7 +529,7 @@ func shouldRetry(ctx context.Context, p *RetryPolicy, resp *http.Response, err e
 		return false
 	}
 	if err != nil {
-		return p.RetryNetworkErrors && !errors.Is(err, context.Canceled)
+		return p.RetryNetworkErrors && !errors.Is(err, context.Canceled) && !IsPreSend(err)
 	}
 	codes := p.StatusCodes
 	if len(codes) == 0 {

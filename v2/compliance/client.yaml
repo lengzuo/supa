@@ -1,0 +1,28 @@
+# Top-level client (package supabase). Session-management, flow-type and
+# URL-detection features are mapped in auth-core.yaml.
+features:
+  client.request_configuration.custom_http_client:
+    status: implemented
+    symbols: [supabase.New, supabase.Options.HTTPClient]
+    tests: [TestCustomHTTPClientAndGlobalHeaders]
+    reason: ""
+  client.request_configuration.global_headers:
+    status: implemented
+    symbols: [supabase.Options.Headers]
+    tests: [TestCustomHTTPClientAndGlobalHeaders, TestPerServiceConfigOverrides]
+    reason: ""
+  client.authentication_integration.third_party_auth:
+    status: implemented
+    symbols: [supabase.Options.AccessToken, supabase.ErrAuthDisabled]
+    tests: [TestThirdPartyAccessToken]
+    reason: ""
+  client.authentication_integration.cross_client_token_sync:
+    status: implemented
+    symbols: [supabase.New, supabase.Client.Realtime, realtime.Client.SetAuth, auth.Client.OnAuthStateChange]
+    tests: [TestCrossClientTokenSync, TestSessionTokenFlowsToServices]
+    reason: ""
+  client.observability.trace_propagation:
+    status: implemented
+    symbols: [supabase.PropagateTrace, supabase.Options.RequestEditors]
+    tests: [TestTracePropagation]
+    reason: ""

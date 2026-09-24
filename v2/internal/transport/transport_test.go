@@ -372,3 +372,20 @@ func TestURLRejectsInvalidEscaping(t *testing.T) {
 		t.Errorf("valid escaped path rejected: %v", err)
 	}
 }
+
+func TestPreSendErrorsAreNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	boom := errors.New("boom")
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }, func(cfg *Config) {
+		cfg.Token = func(context.Context) (string, error) { return "", boom }
+		cfg.Retry = &RetryPolicy{MaxAttempts: 5, RetryNetworkErrors: true, BaseDelay: time.Second}
+	})
+	start := time.Now()
+	_, err := c.DoJSON(context.Background(), &Request{Path: "/"}, nil)
+	if !errors.Is(err, boom) || !IsPreSend(err) {
+		t.Fatalf("err = %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond || calls.Load() != 0 {
+		t.Fatalf("pre-send error was retried or sent: calls=%d elapsed=%v", calls.Load(), time.Since(start))
+	}
+}

@@ -218,7 +218,7 @@ func (c *Client) send(ctx context.Context, req *transport.Request, retryEnabled 
 		resp, err := c.t.Do(ctx, &r)
 		var wait time.Duration
 		if err != nil {
-			if attempt >= maxRetries || ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if attempt >= maxRetries || ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || transport.IsPreSend(err) {
 				return nil, err
 			}
 			wait = c.retry.delay(attempt)
