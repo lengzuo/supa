@@ -29,181 +29,129 @@ libraries and tools**. That means:
 
 ## Project overview
 
-`supa` is a Go client SDK for [Supabase](https://supabase.com). It is one
-package at the repo root:
+`supa` is a Go SDK for [Supabase](https://supabase.com) with feature parity
+with the official `supabase-js` client.
 
-- Module path: `github.com/lengzuo/supa`
-- Package name: **`supabase`**. This differs from the import path, so users
-  write `supabase.New(...)`.
-- Minimum Go version: **1.20** (`go.mod`). Do not use newer language
-  features or stdlib APIs: no builtin `min`/`max`/`clear` (Go 1.21), no
-  `slices`/`maps` stdlib packages (Go 1.21), no range-over-int or range-over-func
-  (Go 1.22/1.23), and no `log/slog`. The local toolchain may be newer, so
-  keep code that compiles on 1.20.
+- **v2 (active)**: module `github.com/lengzuo/supa/v2` in `v2/` (Go major
+  subdirectory layout), `go 1.23`. All new work happens here.
+- **v1 (legacy)**: module `github.com/lengzuo/supa` at the repo root
+  (`auth.go`, `postgres*.go`, `storage.go`, ...). Frozen: security fixes
+  only. Do not add features to v1.
 
-### File map
+### v2 package map
 
-| File | Responsibility |
+| Package | Responsibility |
 |---|---|
-| `client.go` | `New(Config)` wires Auth, DB and Storage. `defaultSender` builds the default `*http.Client`. Holds shared constants (`/auth/v1`, `/storage/v1`, the `apiKey` header). |
-| `config.go` | Public `Config` struct (API key, project ref, bucket, debug, per-service options). |
-| `http_client.go` | `Sender` interface and the `requester` implementation (`Call` for JSON, `Upload` for streams). Every network request goes through this file. |
-| `http_options.go` | `HTTPOption` / `clientConfig`. Currently unused scaffolding. |
-| `auth.go` | GoTrue (Supabase Auth) API: sign-up, sign-in (password/OTP/OAuth/ID token/anonymous), verify, refresh, user, update, sign-out. Exposed through the unexported `authAPI` interface. |
-| `postgres.go`, `postgres_options.go` | PostgREST client (`PostgresClient`, `PostgresAPI`), per-request `HeaderOption` / `AuthToken`, client options. |
-| `postgres_request_builder.go` | `From(table)` → `Select/Insert/Upsert/Update/Delete`, and `QueryRequestBuilder.Execute`. |
-| `postgres_filter_builder.go` | PostgREST filters (`Eq`, `Gt`, `In`, `Not`, `Single`, …). |
-| `postgres_select_builder.go` | `Order`, `Range`, `Limit`, `Offset`. |
-| `postgres_rpc_builder.go` | `RPC(fn, params)` and its `Execute`. |
-| `storage.go` | Storage API: `UploadFile`, `GetPublicUrl`. |
-| `dto.go` | Request/response structs. `json` tags set the body; `url` tags set the query string. |
-| `enums.go` | `Header`, `VerifyType`, `Order`, `Provider` enums with `String()`. |
-| `err.go` | `Exception` interface, `External(...)` for non-2xx auth/storage responses, `PostgresError` for PostgREST errors, `ErrEmptyApiKey`. |
-| `logger.go` | Package-global zerolog wrapper, enabled by `Config.Debug`. |
-| `query.go` | **Vendored copy of `google/go-querystring`** (BSD). Keep its copyright header. Only change it to fix a bug, and note that it was changed. |
-| `common.go` | `apiHostFormat`, generic `min`, the `Resp` and `StreamResp` types. |
+| `v2` (`supabase`) | `New(url, key, *Options)` composes every service; token plumbing (session or third-party `AccessToken`), auth→realtime token sync, global headers/HTTP client/request editors, `PropagateTrace`. |
+| `v2/internal/transport` | The only HTTP code path. Header composition (canonical keys, per-request clone), apikey/Bearer rules, JSON encoding, retries, timeouts, redacted logging, `PathEscape`, `PreSendError`. |
+| `v2/auth` | GoTrue: sign-in/up, sessions & refresh engine, auto-refresh, PKCE, `GetClaims`/JWKS, identities, passkeys, web3, MFA + recovery codes, admin API, OAuth server, ordered event delivery. |
+| `v2/postgrest` | Immutable query builders, filters/modifiers, `Execute`/`ExecuteInto`/`ExecuteTo[T]`, RPC, schema, retry. |
+| `v2/storage` | File buckets & objects, signed/public URLs, analytics (Iceberg REST catalog), vector buckets. |
+| `v2/functions` | Edge Functions `Invoke` (streaming, regions, timeouts). |
+| `v2/realtime` | Phoenix websocket client (JSON + binary serializers), channels, broadcast, presence, postgres changes. |
+| `v2/compliance` | Maps every feature of the upstream capability matrix to Go symbols and tests; `TestCompliance` enforces it. |
 
 ### Upstream references
 
-Keep behavior aligned with the official clients. Read them before adding an
-endpoint:
+Behaviour must match the official clients in
+[`supabase/supabase-js`](https://github.com/supabase/supabase-js)
+(`packages/core/{auth-js,postgrest-js,storage-js,functions-js,realtime-js,supabase-js}`).
+Read the upstream implementation and its tests before changing an endpoint.
+Deliberate divergences are documented on the Go symbol and in the
+compliance YAML.
 
-- Auth: `supabase/auth-js` (formerly gotrue-js), `GoTrueClient.ts`, `GoTrueAdminApi.ts`
-- Database: `supabase/postgrest-js` (`PostgrestClient.ts`, `PostgrestFilterBuilder.ts`, `PostgrestTransformBuilder.ts`)
-- Storage: `supabase/storage-js`
-- PostgREST docs: <https://postgrest.org/en/stable/references/api.html>
+## Conventions (v2)
 
-## Conventions already in the codebase
+- **Constructors**: each service has `New(Config) (*Client, error)`. The root
+  `supabase.New` fills `URL`, `APIKey` and `AccessToken`; new settings are new
+  `Config` fields (zero value = upstream default), never positional params.
+- **All HTTP goes through `internal/transport`.** Never build `http.Request`s
+  in a service package. User-supplied path segments go through
+  `transport.PathEscape` (it also neutralises `.`/`..`). `transport.URL`
+  rejects anything `net/url` would silently re-escape.
+- **Tokens**: user-scoped calls take an explicit token argument; `""` means
+  "use the stored session". Explicit-token calls never read or write the
+  stored session and never emit events.
+- **Errors**: each package has its own error type (`*auth.Error`,
+  `*postgrest.Error`, `*storage.Error`, `functions.HTTPError/RelayError/
+  FetchError`, realtime errors); callers use `errors.As`/`errors.Is`.
+  Failures before a request is sent are `*transport.PreSendError` and are
+  never retried.
+- **Context** first, `error` last, every network call honours ctx.
+- **Logging** via `*slog.Logger` only, off by default, never headers, bodies,
+  tokens, keys or codes.
+- **Doc comments** on every exported identifier, starting with its name.
 
-Follow these unless you are deliberately fixing them. If so, fix them in a
-separate PR.
+## Hard-won rules (each was a real defect found in review)
 
-- **Service constructors and functional options:** `NewAuth(apiKey, host, ...AuthOption)`,
-  `NewStorage(...)`, `NewPostgres(projectRef, ...PostgresOption)`. Options are
-  `func(*T)`. New configuration should be a new `WithXxx` option, not a new
-  positional parameter.
-- **Adding an auth/storage endpoint** follows this shape:
-  1. Add request/response structs to `dto.go` with explicit `json:"..."` and
-     `url:"..."` tags. Use `url:"-"` on anything that must not appear in the
-     query string. `requester.Call` runs `Values(body)` on every body, so a
-     field without a `url` tag **will be put in the URL**.
-  2. Add the method to the `authAPI` / `storageAPI` interface **and** the
-     concrete type (value receiver `func (i Auth)` for Auth, pointer receiver
-     for Storage, to match the existing code).
-  3. Call `i.httpClient.Call(ctx, url, method, body, headerSetter)`. Always set
-     the `apiKey` header, and `Authorization: Bearer <token>` when the call is
-     made on behalf of a user.
-  4. On a transport error, return `err`. On a non-2xx status, return
-     `External(body, status)`. On success, unmarshal into the DTO.
-- **Postgres builders** return pointers and chain. Filters are appended to
-  `url.Values`. `Execute(ctx, result)` unmarshals into `result`. `result == nil`
-  means "no body wanted" and clears the `Accept`/`Prefer` headers.
-- **Errors:** auth and storage return `Exception` (use `errors.As` to get the
-  status code). Postgres and RPC return `*PostgresError`. Keep these types
-  stable. They are part of the public API.
-- **Context:** every network-facing method takes `ctx context.Context` as its
-  first parameter and must pass it to `http.NewRequestWithContext`.
-- **Logging:** use the package `logger` (`Debug`/`Warn`/`Error`, printf-style).
-  Logging is off unless `Config.Debug` is true. Never use `fmt.Print*` or the
-  `log` package in library code.
-- **Doc comments** on every exported identifier, starting with the identifier's
-  name (`// SignUp creates a new user.`).
-
-## Known hazards: read before touching the HTTP layer
-
-These are real issues in the current code. Do not copy the patterns into new
-code. Fix them in focused PRs, with tests.
-
-1. **The header map is shared across requests (data race and credential leak).**
-   `requester.Call`/`Upload` do `httpReq.Header = c.customHeader` and then
-   mutate it. Every request writes into the same `http.Header`, so a user's
-   `Authorization` token from one call can be sent on another concurrent call.
-   The fix is to `Clone()` the header per request. Any change here needs a
-   `-race` test that runs concurrent calls with different tokens.
-2. **Secrets in debug logs.** `Call` logs full request headers (the API key and
-   bearer tokens) and the first 500 bytes of bodies (passwords, refresh
-   tokens). New code must not log secrets. Redact `Authorization`, `apiKey`,
-   and token/password fields.
-3. **Global logger.** `newLogger` replaces a package-level variable on every
-   `New(...)`, so two clients with different `Debug` settings step on each
-   other. Before calling `New`, `logger` is nil. Code paths that can run
-   before `New` must not log.
-4. **Builders mutate shared state.** `RequestBuilder.Insert/Upsert/Update` set
-   headers on `b.header`, and filters mutate `params` in place. Builders are
-   single-use and not goroutine-safe. Document this, or copy on write.
-5. **Enum `String()` indexes an array** and panics for out-of-range values.
-   New enums should use a `switch` with a fallback.
-6. **`NewPostgres` panics** on a bad URL. New constructors should return an
-   error instead.
-7. **Hard-coded host** `https://%s.supabase.co`. Self-hosted and local
-   (`supabase start`) setups are not supported yet. A `WithBaseURL`-style
-   option is the backward-compatible way to add them.
-8. **Filter values are not escaped.** `In`/`Cs`/`Cd`/`Ov` join raw strings.
-   Values that contain `,`, `(`, `)` or `"` change the PostgREST query.
-   postgrest-js quotes such values. Follow that when fixing it.
-9. **README drift.** The README shows `dto.` and `enum.` packages and
-   `ExecuteWithContext`, but none of these exist. The real names are
-   `supabase.SignUpRequest`, `supabase.VerifyTypeMagicLink.String()` and
-   `Execute`. When you change the API, update the README examples in the same PR.
+1. **Never fall back to the API key when a session exists but cannot be
+   loaded or refreshed.** With a secret key that silently bypasses RLS. Fail
+   closed.
+2. **Never write back a session snapshot taken before a network call.**
+   Re-read under `sessionMu` and only commit if the stored session is still
+   the one the request started from (see `updateStoredUser`,
+   `replaceSessionIfCurrent`, `removalEpoch`).
+3. **Never send a refresh token that storage has already rotated past.**
+   GoTrue revokes the whole session on reuse.
+4. **Auth events are queued under `sessionMu` in commit order** and delivered
+   before the caller returns; never notify while holding a lock.
+5. **Never hold a mutex across network I/O**; use single-flight with
+   context-aware waiting.
+6. **Headers are canonicalised and cloned per request.** A shared
+   `http.Header` leaked tokens between users in v1.
+7. **Redact secrets inside wrapped errors too** (`*url.Error.URL`), not just
+   the outer message.
+8. **Validate server-supplied path fragments** (e.g. the Iceberg prefix) with
+   a strict whitelist; a hostile server must not be able to redirect a
+   credentialed request to another service.
+9. **Builders are immutable values**; zero values and nil receivers return
+   errors, never panic.
 
 ## Commands
 
 ```sh
-go build ./...
+cd v2
+gofmt -l .                        # must print nothing
 go vet ./...
-gofmt -l .                  # must print nothing
-go test -race ./...         # there are no tests yet; add them
-golangci-lint run ./...     # 9 existing findings (errcheck/staticcheck/unused); add no new ones
-go mod tidy                 # go.mod/go.sum must stay tidy
+go test -race ./...               # includes the compliance gate
+go test -race -count=10 -cpu 1,4 ./auth/ ./realtime/   # concurrency-heavy packages
+golangci-lint run ./...           # must report 0 issues
 ```
-
-Before you call a change done, all of the above must pass. To check the Go
-1.20 floor, run `GOTOOLCHAIN=go1.20.14 go build ./...` when network access
-allows.
 
 ## Testing standards
 
-- There are no tests yet. **Every bug fix or new feature adds tests.** Use the
-  standard `testing` package with table-driven tests. `testify` is already a
-  dependency (`assert`/`require`) and is fine to use.
-- **Never hit a real Supabase project in unit tests.** Use
-  `net/http/httptest.NewServer` and point clients at it. For Auth/Storage, pass
-  the server URL as the host (`NewAuth(key, srv.URL+"/auth/v1")`). For
-  Postgres, there is no base-URL option yet, so write an internal test
-  (`package supabase`) that sets `baseURL` on the `PostgresClient` returned by
-  `NewPostgres` to point at the test server.
-- Assert on the **wire format**: method, path, query string, headers
-  (`apiKey`, `Authorization`, `Prefer`, `Accept`) and JSON body. That is the
-  contract with Supabase.
-- Cover error paths: non-2xx with a JSON error body, non-2xx with a non-JSON
-  body, transport errors, context cancellation.
-- Run with `-race`. Anything that touches `requester` or the builders needs a
-  concurrent test.
-- Integration tests against a live project go behind a build tag
-  (`//go:build integration`) and read credentials from env vars. `tests/` is
-  git-ignored for local scratch work. Never commit keys.
+- Standard `testing` package only; `net/http/httptest` fakes, never a real
+  Supabase project. Assert the wire format: method, path (raw `RequestURI`
+  for escaping), query, headers, JSON body.
+- Cite the upstream source above each endpoint test
+  (`// upstream: auth-js src/GoTrueClient.ts signUp`).
+- Concurrency-sensitive code needs `-race` tests that reproduce the
+  interleaving deterministically (gates/barriers), not sleeps.
+- Every README snippet has a compiled `Example` function
+  (`v2/example_test.go`, `v2/*/example_test.go`).
+- **Compliance**: when adding or changing a feature, update the mapping in
+  `v2/compliance/*.yaml` (feature id → symbols → tests). When upstream adds
+  features, regenerate `upstream_features.txt` from supabase-js
+  `sdk-compliance.yaml`; `TestCompliance` fails until they are mapped.
 
-## API design checklist for public changes
+## API design checklist
 
-- [ ] Is the new exported name the smallest surface that solves the problem?
-      Could it stay unexported?
-- [ ] Does it take `context.Context` first and return `error` last?
-- [ ] Can it be configured with an option instead of a breaking signature
-      change?
-- [ ] Is it safe for concurrent use, or clearly documented as not?
-- [ ] Are errors inspectable (`errors.As`/`errors.Is`) and wrapped with `%w`
-      where you add context?
-- [ ] Does anything log or return a secret?
-- [ ] Does it compile on Go 1.20?
-- [ ] Doc comment, README example, and tests updated?
-- [ ] Is a breaking change unavoidable? Then call it out explicitly in the PR
-      and in the release notes (the module is v0, but users still depend on it).
+- [ ] Smallest exported surface that solves the problem?
+- [ ] `context.Context` first, `error` last, errors inspectable with
+      `errors.As`/`errors.Is`?
+- [ ] New config as a `Config` field with a safe zero value?
+- [ ] Safe for concurrent use, or documented otherwise?
+- [ ] Anything that could log, return or persist a secret?
+- [ ] Safe for multi-user servers (no hidden shared session/token state)?
+- [ ] Doc comment, README example (compiled), tests, compliance mapping?
+- [ ] Breaking change? v2 is unreleased; after release, breaking changes
+      need a new major version.
 
 ## Git and PR hygiene
 
-- Commit style in history: short imperative summaries, often prefixed
-  (`add:`, `fix:`, `refactor:`, `change:`). Keep to that.
-- Do not commit `.idea/`, `vendor/`, `tests/` scratch files, `.env` files or
-  credentials.
-- The PR description says **what changed, why, and how it was tested**, and
-  flags any public API or behavior change.
+- Commit style: short imperative summaries with a prefix (`add:`, `fix:`,
+  `docs:`, `chore:`, `refactor:`).
+- Do not commit `.idea/`, `vendor/`, `tests/` scratch files, `.claude/`
+  worktrees, `zz_*probe*_test.go` files, `.env` files or credentials.
+- PR descriptions say what changed, why, how it was tested, and flag any
+  public API or behaviour change.
