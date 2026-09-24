@@ -49,10 +49,17 @@ func (c *Client) deliverEvents() {
 		return
 	}
 	c.delivering = true
+	// delivering is cleared in the same critical section that observes the
+	// empty queue; otherwise an event enqueued in between would be stranded
+	// (its deliverEvents call would see delivering=true and return). If a
+	// listener panics, clear the flag so later events are still delivered.
 	defer func() {
-		c.evMu.Lock()
-		c.delivering = false
-		c.evMu.Unlock()
+		if r := recover(); r != nil {
+			c.evMu.Lock()
+			c.delivering = false
+			c.evMu.Unlock()
+			panic(r)
+		}
 	}()
 	for len(c.evQueue) > 0 {
 		ev := c.evQueue[0]
@@ -61,6 +68,7 @@ func (c *Client) deliverEvents() {
 		c.notify(ev.event, ev.session)
 		c.evMu.Lock()
 	}
+	c.delivering = false
 	c.evMu.Unlock()
 }
 
