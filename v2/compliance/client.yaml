@@ -9,20 +9,20 @@ features:
   client.request_configuration.global_headers:
     status: implemented
     symbols: [supabase.Options.Headers]
-    tests: [TestCustomHTTPClientAndGlobalHeaders, TestPerServiceConfigOverrides]
+    tests: [TestCustomHTTPClientAndGlobalHeaders, TestPerServiceConfigOverrides, TestGlobalAuthorizationAndNewKeyFunctions]
     reason: ""
   client.authentication_integration.third_party_auth:
     status: implemented
-    symbols: [supabase.Options.AccessToken, supabase.ErrAuthDisabled]
-    tests: [TestThirdPartyAccessToken]
+    symbols: [supabase.Options.AccessToken, supabase.Client.AuthClient, supabase.ErrAuthDisabled]
+    tests: [TestThirdPartyAccessToken, TestAuthClientDisabled, TestThirdPartyTokenErrorNotRetried]
     reason: ""
   client.authentication_integration.cross_client_token_sync:
     status: implemented
     symbols: [supabase.New, supabase.Client.Realtime, realtime.Client.SetAuth, auth.Client.OnAuthStateChange]
-    tests: [TestCrossClientTokenSync, TestSessionTokenFlowsToServices]
+    tests: [TestCrossClientTokenSync, TestSessionTokenFlowsToServices, TestSignedOutAlwaysSyncs, TestSessionLoadErrorFailsClosed]
     reason: ""
   client.observability.trace_propagation:
     status: implemented
     symbols: [supabase.PropagateTrace, supabase.Options.RequestEditors]
-    tests: [TestTracePropagation]
+    tests: [TestTracePropagation, TestPropagateTraceHeaderRules]
     reason: ""

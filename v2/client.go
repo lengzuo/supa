@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lengzuo/supa/v2/auth"
 	"github.com/lengzuo/supa/v2/functions"
@@ -39,8 +40,8 @@ import (
 // Version is the SDK version.
 const Version = transport.Version
 
-// ErrAuthDisabled is returned by Client methods that need the Auth client
-// when Options.AccessToken is set (third-party auth), matching supabase-js.
+// ErrAuthDisabled is returned by Client.AuthClient when Options.AccessToken
+// is set (third-party auth); supabase-js throws in the same situation.
 var ErrAuthDisabled = errors.New("supabase: Auth is disabled because Options.AccessToken is set")
 
 // Options configures New. The zero value (or nil) is valid.
@@ -79,7 +80,9 @@ type Options struct {
 
 // Client is a Supabase project client.
 type Client struct {
-	// Auth is the Auth client. It is nil when Options.AccessToken is set.
+	// Auth is the Auth client. It is nil when Options.AccessToken is set
+	// (third-party auth); use AuthClient to get an error instead of a nil
+	// pointer in code that supports both modes.
 	Auth *auth.Client
 	// Storage is the Storage client.
 	Storage *storage.Client
@@ -97,7 +100,11 @@ type Client struct {
 	tokenMu   sync.Mutex
 	lastToken string
 	// syncMu serializes pushes to Realtime so the latest token always wins.
-	syncMu sync.Mutex
+	syncMu      sync.Mutex
+	syncWG      sync.WaitGroup
+	syncTimeout time.Duration
+	closeOnce   sync.Once
+	closed      chan struct{}
 }
 
 // New returns a client for the project at supabaseURL (for example
@@ -118,7 +125,10 @@ func New(supabaseURL, supabaseKey string, opts *Options) (*Client, error) {
 	}
 	endpoint := func(p string) string { return base + "/" + p }
 
-	c := &Client{apiKey: supabaseKey, accessToken: o.AccessToken}
+	c := &Client{apiKey: supabaseKey, accessToken: o.AccessToken, closed: make(chan struct{}), syncTimeout: 30 * time.Second}
+	if o.Realtime.Timeout > 0 {
+		c.syncTimeout = o.Realtime.Timeout
+	}
 
 	if o.AccessToken == nil {
 		ac := o.Auth
@@ -179,6 +189,15 @@ func New(supabaseURL, supabaseKey string, opts *Options) (*Client, error) {
 	return c, nil
 }
 
+// AuthClient returns the Auth client, or ErrAuthDisabled when the Client
+// was created with Options.AccessToken.
+func (c *Client) AuthClient() (*auth.Client, error) {
+	if c.Auth == nil {
+		return nil, ErrAuthDisabled
+	}
+	return c.Auth, nil
+}
+
 // ProjectURL returns the hosted API URL for a project reference.
 func ProjectURL(projectRef string) string {
 	return "https://" + projectRef + ".supabase.co"
@@ -219,11 +238,19 @@ func (c *Client) RemoveAllChannels(ctx context.Context) error {
 // Close stops background work: the auth listener and auto-refresh, and the
 // Realtime connection. The Client must not be used afterwards.
 func (c *Client) Close(ctx context.Context) error {
+	c.closeOnce.Do(func() { close(c.closed) })
 	if c.unsubscribe != nil {
 		c.unsubscribe()
 	}
 	if c.Auth != nil {
 		c.Auth.StopAutoRefresh()
+	}
+	done := make(chan struct{})
+	go func() { c.syncWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	return c.Realtime.Disconnect(ctx)
 }
@@ -237,11 +264,13 @@ func (c *Client) sessionToken(ctx context.Context) (string, error) {
 	}
 	s, err := c.Auth.GetSession(ctx)
 	if err != nil {
-		// No usable session: behave like supabase-js, which sends the key.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return "", err
-		}
-		return "", nil
+		// Fail closed: a session that exists but cannot be loaded or
+		// refreshed must never downgrade (or, with a secret key, upgrade)
+		// the request to the API key. supabase-js falls back to the key on
+		// refresh failures; we return the error instead. Once Auth drops an
+		// unrecoverable session, GetSession returns (nil, nil) and requests
+		// use the key again.
+		return "", fmt.Errorf("supabase: current session: %w", err)
 	}
 	if s == nil {
 		return "", nil
@@ -259,8 +288,13 @@ func (c *Client) realtimeToken(ctx context.Context) (string, error) {
 	return c.apiKey, nil
 }
 
+// handleAuthChange mirrors supabase-js _handleTokenChanged: token-bearing
+// events push the new token to Realtime when it changed, and SIGNED_OUT
+// always resets Realtime to the API key. MFA_CHALLENGE_VERIFIED (a new aal2
+// token) is also synced, which supabase-js does not do.
 func (c *Client) handleAuthChange(event auth.AuthChangeEvent, s *auth.Session) {
 	var token string
+	always := false
 	switch event {
 	case auth.EventSignedIn, auth.EventTokenRefreshed, auth.EventInitialSession, auth.EventMFAChallengeVerified:
 		if s == nil {
@@ -268,7 +302,7 @@ func (c *Client) handleAuthChange(event auth.AuthChangeEvent, s *auth.Session) {
 		}
 		token = s.AccessToken
 	case auth.EventSignedOut:
-		token = ""
+		token, always = "", true
 	default:
 		return
 	}
@@ -276,23 +310,37 @@ func (c *Client) handleAuthChange(event auth.AuthChangeEvent, s *auth.Session) {
 	changed := token != c.lastToken
 	c.lastToken = token
 	c.tokenMu.Unlock()
-	if !changed {
+	if !changed && !always {
 		return
+	}
+	select {
+	case <-c.closed:
+		return
+	default:
 	}
 	// Auth callbacks must not block, so propagate asynchronously. Each
 	// push sends the latest token under syncMu, so a slow earlier push can
 	// never overwrite a newer token. SetAuth("") re-reads the token via the
 	// AccessToken callback (the API key after sign-out).
+	c.syncWG.Add(1)
 	go c.syncRealtimeToken()
 }
 
 func (c *Client) syncRealtimeToken() {
+	defer c.syncWG.Done()
 	c.syncMu.Lock()
 	defer c.syncMu.Unlock()
+	select {
+	case <-c.closed:
+		return
+	default:
+	}
 	c.tokenMu.Lock()
 	token := c.lastToken
 	c.tokenMu.Unlock()
-	_ = c.Realtime.SetAuth(context.Background(), token)
+	ctx, cancel := context.WithTimeout(context.Background(), c.syncTimeout)
+	defer cancel()
+	_ = c.Realtime.SetAuth(ctx, token)
 }
 
 // PropagateTrace returns a request editor that copies trace context into
@@ -302,16 +350,44 @@ func (c *Client) syncRealtimeToken() {
 //		otel.GetTextMapPropagator().Inject(r.Context(), propagation.HeaderCarrier(r.Header))
 //	}
 //
-// Existing traceparent/tracestate/baggage headers are left untouched, like
-// supabase-js. Only Supabase requests are affected.
+// Like supabase-js, each of traceparent, tracestate and baggage is only
+// added when the request does not already carry it, nothing is added
+// without a traceparent, and for unsampled traces (trace-flags 00) only
+// traceparent is sent. Only Supabase requests are affected.
 func PropagateTrace(inject func(r *http.Request)) func(*http.Request) error {
 	return func(r *http.Request) error {
-		if r.Header.Get("traceparent") != "" {
+		scratch := r.Clone(r.Context())
+		scratch.Header = http.Header{}
+		inject(scratch)
+		tp := scratch.Header.Get("traceparent")
+		if tp == "" {
 			return nil
 		}
-		inject(r)
+		keys := []string{"traceparent", "tracestate", "baggage"}
+		if !traceSampled(tp) {
+			keys = keys[:1]
+		}
+		for _, k := range keys {
+			if v := scratch.Header.Get(k); v != "" && r.Header.Get(k) == "" {
+				r.Header.Set(k, v)
+			}
+		}
 		return nil
 	}
+}
+
+// traceSampled reports whether a W3C traceparent has the sampled flag set.
+// Unparseable values are treated as sampled (propagated as-is).
+func traceSampled(tp string) bool {
+	parts := strings.Split(tp, "-")
+	if len(parts) < 4 || len(parts[3]) != 2 {
+		return true
+	}
+	var flags byte
+	if _, err := fmt.Sscanf(parts[3], "%02x", &flags); err != nil {
+		return true
+	}
+	return flags&0x01 == 1
 }
 
 func validateURL(raw string) (string, error) {

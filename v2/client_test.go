@@ -299,3 +299,155 @@ func TestPerServiceConfigOverrides(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// failingStorage fails GetItem once armed.
+type failingStorage struct {
+	*auth.MemoryStorage
+	fail atomic.Bool
+}
+
+func (f *failingStorage) GetItem(ctx context.Context, key string) (string, error) {
+	if f.fail.Load() {
+		return "", errors.New("storage down")
+	}
+	return f.MemoryStorage.GetItem(ctx, key)
+}
+
+// Review B1: a session that cannot be loaded must fail the request, never
+// fall back to the (possibly secret) API key.
+func TestSessionLoadErrorFailsClosed(t *testing.T) {
+	fp := newFakeProject(t)
+	st := &failingStorage{MemoryStorage: auth.NewMemoryStorage()}
+	opts := &Options{}
+	opts.Auth.Storage = st
+	c, err := New(fp.URL, "sb_secret_xyz", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := c.Auth.SignInWithPassword(ctx, auth.SignInWithPasswordParams{Email: "a@b.c", Password: "pw"}); err != nil {
+		t.Fatal(err)
+	}
+	st.fail.Store(true)
+	fp.mu.Lock()
+	before := len(fp.reqs)
+	fp.mu.Unlock()
+	if _, err := c.From("todos").Select("*").Execute(ctx); err == nil {
+		t.Fatal("request succeeded with an unreadable session")
+	}
+	fp.mu.Lock()
+	sent := len(fp.reqs) - before
+	fp.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("%d requests sent despite the session error", sent)
+	}
+	if _, err := c.realtimeToken(ctx); err == nil {
+		t.Fatal("realtime token fell back to the key on a session error")
+	}
+}
+
+func TestAuthClientDisabled(t *testing.T) {
+	c, _ := New("https://x.supabase.co", "k", &Options{AccessToken: func(context.Context) (string, error) { return "t", nil }})
+	if _, err := c.AuthClient(); !errors.Is(err, ErrAuthDisabled) {
+		t.Fatalf("err = %v", err)
+	}
+	c2, _ := New("https://x.supabase.co", "k", nil)
+	if a, err := c2.AuthClient(); err != nil || a == nil {
+		t.Fatalf("AuthClient = %v, %v", a, err)
+	}
+}
+
+func TestPropagateTraceHeaderRules(t *testing.T) {
+	inject := func(tp string) func(*http.Request) error {
+		return PropagateTrace(func(r *http.Request) {
+			r.Header.Set("traceparent", tp)
+			r.Header.Set("tracestate", "vendor=injected")
+			r.Header.Set("baggage", "user=injected")
+		})
+	}
+	sampled := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	unsampled := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+
+	r, _ := http.NewRequest(http.MethodGet, "https://x.supabase.co", nil)
+	r.Header.Set("baggage", "user=1")
+	_ = inject(sampled)(r)
+	if r.Header.Get("traceparent") != sampled || r.Header.Get("tracestate") != "vendor=injected" || r.Header.Get("baggage") != "user=1" {
+		t.Errorf("sampled: %v", r.Header)
+	}
+	r2, _ := http.NewRequest(http.MethodGet, "https://x.supabase.co", nil)
+	_ = inject(unsampled)(r2)
+	if r2.Header.Get("traceparent") != unsampled || r2.Header.Get("tracestate") != "" || r2.Header.Get("baggage") != "" {
+		t.Errorf("unsampled: %v", r2.Header)
+	}
+	r3, _ := http.NewRequest(http.MethodGet, "https://x.supabase.co", nil)
+	_ = PropagateTrace(func(r *http.Request) { r.Header.Set("baggage", "x=1") })(r3)
+	if r3.Header.Get("baggage") != "" {
+		t.Error("headers added without a traceparent")
+	}
+}
+
+// Review N4: SIGNED_OUT resets Realtime even if the token was never seen
+// (e.g. a session restored from persistent storage).
+func TestSignedOutAlwaysSyncs(t *testing.T) {
+	fp := newFakeProject(t)
+	st := auth.NewMemoryStorage()
+	a, _ := auth.New(auth.Config{URL: fp.URL + "/auth/v1", APIKey: "anon", Storage: st})
+	if _, err := a.SignInWithPassword(context.Background(), auth.SignInWithPasswordParams{Email: "a@b.c", Password: "pw"}); err != nil {
+		t.Fatal(err)
+	}
+	opts := &Options{}
+	opts.Auth.Storage = st // persisted session, never announced to c
+	c, _ := New(fp.URL, "anon", opts)
+	var synced atomic.Int32
+	c.Auth.OnAuthStateChange(func(ev auth.AuthChangeEvent, _ *auth.Session) {
+		if ev == auth.EventSignedOut {
+			synced.Add(1)
+		}
+	})
+	if err := c.Auth.SignOut(context.Background(), "", auth.SignOutLocal); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(context.Background()); err != nil { // waits for the sync goroutine
+		t.Fatal(err)
+	}
+	if synced.Load() != 1 {
+		t.Fatalf("SIGNED_OUT events = %d", synced.Load())
+	}
+	if tok, _ := c.realtimeToken(context.Background()); tok != "anon" {
+		t.Fatalf("realtime token after sign-out = %q", tok)
+	}
+}
+
+func TestGlobalAuthorizationAndNewKeyFunctions(t *testing.T) {
+	fp := newFakeProject(t)
+	c, _ := New(fp.URL, "sb_publishable_abc", nil)
+	exercise(t, c)
+	if got := fp.last("/functions/v1/hello").Header.Get("Authorization"); got != "" {
+		t.Errorf("functions sent new-format key as bearer: %q", got)
+	}
+	if got := fp.last("/rest/v1/todos").Header.Get("Authorization"); got != "Bearer sb_publishable_abc" {
+		t.Errorf("rest Authorization = %q", got)
+	}
+	c2, _ := New(fp.URL, "anon", &Options{Headers: http.Header{"authorization": {"Bearer custom"}}})
+	exercise(t, c2)
+	for _, p := range []string{"/rest/v1/todos", "/storage/v1/bucket", "/functions/v1/hello"} {
+		if got := fp.last(p).Header.Values("Authorization"); len(got) != 1 || got[0] != "Bearer custom" {
+			t.Errorf("%s: Authorization = %q", p, got)
+		}
+	}
+}
+
+func TestThirdPartyTokenErrorNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	c, _ := New("http://127.0.0.1:1", "anon", &Options{AccessToken: func(context.Context) (string, error) {
+		calls.Add(1)
+		return "", errors.New("idp down")
+	}})
+	start := time.Now()
+	if _, err := c.From("todos").Select("*").Execute(context.Background()); err == nil {
+		t.Fatal("expected error")
+	}
+	if calls.Load() != 1 || time.Since(start) > time.Second {
+		t.Fatalf("token callback called %d times in %v", calls.Load(), time.Since(start))
+	}
+}
