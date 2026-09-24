@@ -1,0 +1,195 @@
+# auth-core compliance (package github.com/lengzuo/supa/v2/auth).
+# Upstream: packages/core/auth-js/src/GoTrueClient.ts and lib/*.
+features:
+  auth.sign_in.sign_up:
+    status: implemented
+    symbols: [auth.Client.SignUp, auth.SignUpParams, auth.AuthResponse]
+    tests: [TestSignUp, TestSignUpPKCE]
+    reason: ""
+  auth.sign_in.sign_in_with_password:
+    status: implemented
+    symbols: [auth.Client.SignInWithPassword, auth.SignInWithPasswordParams, auth.WeakPassword]
+    tests: [TestSignInWithPassword]
+    reason: ""
+  auth.sign_in.sign_in_with_otp:
+    status: implemented
+    symbols: [auth.Client.SignInWithOTP, auth.SignInWithOTPParams, auth.OTPResponse]
+    tests: [TestSignInWithOTP]
+    reason: ""
+  auth.sign_in.verify_otp:
+    status: implemented
+    symbols: [auth.Client.VerifyOTP, auth.VerifyOTPParams]
+    tests: [TestVerifyOTP]
+    reason: ""
+  auth.sign_in.sign_in_anonymously:
+    status: implemented
+    symbols: [auth.Client.SignInAnonymously, auth.SignInAnonymouslyParams]
+    tests: [TestSignInAnonymously]
+    reason: ""
+  auth.sign_in.sign_in_with_oauth:
+    status: implemented
+    symbols: [auth.Client.SignInWithOAuth, auth.SignInWithOAuthParams, auth.OAuthResponse]
+    tests: [TestSignInWithOAuth]
+    reason: ""
+  auth.sign_in.sign_in_with_id_token:
+    status: implemented
+    symbols: [auth.Client.SignInWithIDToken, auth.SignInWithIDTokenParams]
+    tests: [TestSignInWithIDToken]
+    reason: ""
+  auth.sign_in.sign_in_with_sso:
+    status: implemented
+    symbols: [auth.Client.SignInWithSSO, auth.SignInWithSSOParams, auth.SSOResponse]
+    tests: [TestSignInWithSSO]
+    reason: ""
+  auth.sign_in.sign_in_with_web3:
+    status: implemented
+    symbols: [auth.Client.SignInWithWeb3, auth.SignInWithWeb3Params, auth.Web3Chain, auth.CreateSIWEMessage, auth.CreateSolanaSignInMessage]
+    tests: [TestSignInWithWeb3, TestCreateSIWEMessage, TestCreateSolanaSignInMessage]
+    reason: ""
+  auth.sign_in.exchange_code_for_session:
+    status: implemented
+    symbols: [auth.Client.ExchangeCodeForSession, auth.ExchangeCodeOptions]
+    tests: [TestExchangeCodeForSession]
+    reason: ""
+  auth.sign_in.reauthenticate:
+    status: implemented
+    symbols: [auth.Client.Reauthenticate]
+    tests: [TestReauthenticate]
+    reason: ""
+  auth.sign_in.resend_confirmation:
+    status: implemented
+    symbols: [auth.Client.Resend, auth.ResendParams]
+    tests: [TestResend]
+    reason: ""
+  auth.sign_in.send_password_reset_email:
+    status: implemented
+    symbols: [auth.Client.ResetPasswordForEmail, auth.ResetPasswordForEmailParams]
+    tests: [TestResetPasswordForEmail]
+    reason: ""
+  auth.sign_in.concurrent_pkce_flows:
+    status: implemented
+    symbols: [auth.Client.ExchangeCodeForSession, auth.ExchangeCodeOptions, auth.OAuthResponse, auth.PKCEFlowIDParam, auth.Config]
+    tests: [TestConcurrentPKCEFlows]
+    reason: ""
+
+  auth.session.auto_refresh:
+    status: implemented
+    symbols: [auth.Client.StartAutoRefresh, auth.Client.StopAutoRefresh, auth.Config]
+    tests: [TestAutoRefresh, TestAutoRefreshConfig]
+    reason: ""
+  auth.session.get_claims:
+    status: implemented
+    symbols: [auth.Client.GetClaims, auth.GetClaimsOptions, auth.ClaimsResult, auth.JWK, auth.JWKSCacheTTL]
+    tests: [TestGetClaims, TestAMREntryUnmarshal]
+    reason: ""
+  auth.session.get_session:
+    status: implemented
+    symbols: [auth.Client.GetSession, auth.ExpiryMargin, auth.ErrRefreshDiscarded]
+    tests: [TestGetSession]
+    reason: ""
+  auth.session.get_user:
+    status: implemented
+    symbols: [auth.Client.GetUser]
+    tests: [TestGetUser]
+    reason: ""
+  auth.session.refresh_session:
+    status: implemented
+    symbols: [auth.Client.RefreshSession]
+    tests: [TestRefreshSession]
+    reason: ""
+  auth.session.set_session:
+    status: implemented
+    symbols: [auth.Client.SetSession]
+    tests: [TestSetSession]
+    reason: ""
+  auth.session.sign_out:
+    status: implemented
+    symbols: [auth.Client.SignOut, auth.SignOutScope]
+    tests: [TestSignOut]
+    reason: ""
+  auth.session.sign_out_reason:
+    status: not_applicable
+    symbols: []
+    tests: []
+    reason: >-
+      Upstream marks this feature not_implemented in sdk-compliance.yaml and
+      auth-js exposes no sign-out reason: SIGNED_OUT is delivered with a null
+      session only, and the Auth API's POST /logout accepts only the scope
+      query parameter and returns no reason. There is nothing on the wire to
+      surface, so a Go API would have to invent semantics.
+  auth.session.subscribe_auth_events:
+    status: implemented
+    symbols: [auth.Client.OnAuthStateChange, auth.AuthChangeEvent]
+    tests: [TestOnAuthStateChange]
+    reason: ""
+  auth.session.update_user:
+    status: implemented
+    symbols: [auth.Client.UpdateUser, auth.UpdateUserParams]
+    tests: [TestUpdateUser]
+    reason: ""
+
+  auth.identities.link_identity:
+    status: implemented
+    symbols: [auth.Client.LinkIdentity, auth.Client.LinkIdentityWithIDToken]
+    tests: [TestLinkIdentity]
+    reason: ""
+  auth.identities.list_identities:
+    status: implemented
+    symbols: [auth.Client.GetUserIdentities]
+    tests: [TestGetUserIdentities]
+    reason: ""
+  auth.identities.unlink_identity:
+    status: implemented
+    symbols: [auth.Client.UnlinkIdentity]
+    tests: [TestUnlinkIdentity]
+    reason: ""
+
+  auth.passkey.register_passkey:
+    status: implemented
+    symbols: [auth.Client.Passkey, auth.PasskeyAPI.StartRegistration, auth.PasskeyAPI.VerifyRegistration, auth.PasskeyChallenge, auth.VerifyPasskeyRegistrationParams]
+    tests: [TestPasskeyRegistration]
+    reason: ""
+  auth.passkey.sign_in_with_passkey:
+    status: implemented
+    symbols: [auth.PasskeyAPI.StartAuthentication, auth.PasskeyAPI.VerifyAuthentication, auth.StartPasskeyAuthenticationParams, auth.VerifyPasskeyAuthenticationParams]
+    tests: [TestPasskeyAuthentication]
+    reason: ""
+  auth.passkey.delete_passkey:
+    status: implemented
+    symbols: [auth.PasskeyAPI.Delete]
+    tests: [TestPasskeyManagement]
+    reason: ""
+  auth.passkey.list_passkeys:
+    status: implemented
+    symbols: [auth.PasskeyAPI.List, auth.Passkey]
+    tests: [TestPasskeyManagement]
+    reason: ""
+  auth.passkey.update_passkey:
+    status: implemented
+    symbols: [auth.PasskeyAPI.Update, auth.PasskeyUpdateParams]
+    tests: [TestPasskeyManagement]
+    reason: ""
+
+  client.session_management.custom_storage:
+    status: implemented
+    symbols: [auth.SessionStorage, auth.Config]
+    tests: [TestCustomStorage]
+    reason: ""
+  client.session_management.persist_session:
+    status: implemented
+    # Go default is the in-memory MemoryStorage (auth-js persistSession:
+    # false); persistence across processes is opt-in by supplying a durable
+    # SessionStorage in Config.Storage (with Config.StorageKey).
+    symbols: [auth.Config, auth.MemoryStorage, auth.NewMemoryStorage, auth.SessionStorage]
+    tests: [TestCustomStorage]
+    reason: ""
+  client.authentication_integration.oauth_flow_type:
+    status: implemented
+    symbols: [auth.FlowType, auth.FlowPKCE, auth.FlowImplicit, auth.Config]
+    tests: [TestSignUpPKCE, TestSignInWithOAuth, TestExchangeCodeForSession]
+    reason: ""
+  client.authentication_integration.session_url_detection:
+    status: implemented
+    symbols: [auth.Client.GetSessionFromURL, auth.ErrImplicitGrantRedirect, auth.ErrPKCEGrantCodeExchange]
+    tests: [TestGetSessionFromURL, TestConcurrentPKCEFlows]
+    reason: ""

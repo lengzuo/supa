@@ -80,7 +80,53 @@ var (
 	ErrPKCEVerifierMissing = &Error{Message: "PKCE code verifier not found in storage", Code: "pkce_verifier_missing"}
 	// ErrInvalidArgument is wrapped when a request is rejected client-side.
 	ErrInvalidArgument = errors.New("auth: invalid argument")
+	// ErrInvalidTokenResponse is returned when a sign-in endpoint answered
+	// 2xx without a session or user.
+	ErrInvalidTokenResponse = &Error{Message: "auth session or user missing from token response", Code: "invalid_token_response"}
+	// ErrRefreshDiscarded is returned when a token refresh succeeded but its
+	// result was discarded because the stored session changed while the
+	// refresh was in flight (a concurrent sign-out or another refresh). The
+	// stored session, if any, is left as the concurrent writer set it.
+	ErrRefreshDiscarded = &Error{Message: "refresh discarded: the stored session changed while it was in flight", Code: "refresh_discarded"}
+	// ErrImplicitGrantRedirect is matched (via errors.Is) by errors from
+	// GetSessionFromURL for URLs that carry no usable implicit-grant
+	// session or that do not match the configured FlowType.
+	ErrImplicitGrantRedirect = &Error{Message: "implicit grant redirect error", Code: "implicit_grant_redirect"}
+	// ErrPKCEGrantCodeExchange is matched (via errors.Is) by errors from
+	// GetSessionFromURL for PKCE callback URLs that cannot be exchanged.
+	ErrPKCEGrantCodeExchange = &Error{Message: "PKCE grant code exchange error", Code: "pkce_grant_code_exchange"}
 )
+
+// newError returns a client-side *Error carrying code so that it matches
+// the sentinel with the same code under errors.Is.
+func newError(code, msg string) *Error { return &Error{Message: msg, Code: code} }
+
+// invalidJWT returns an error matching ErrInvalidJWT with a specific message.
+func invalidJWT(msg string) *Error { return newError(ErrInvalidJWT.Code, msg) }
+
+// isRetryable reports whether err is an infrastructure failure (5xx,
+// network, timeout) after which a stored session must be kept.
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Retryable
+	}
+	return true
+}
+
+// isSessionMissing reports whether err means the user has no (valid)
+// session: the client-side ErrSessionMissing or the server's
+// session_not_found code.
+func isSessionMissing(err error) bool {
+	var e *Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.Code == ErrSessionMissing.Code || e.Code == ErrorCodeSessionNotFound
+}
 
 // networkErrorCodes mirror auth-js: infrastructure failures that must not
 // invalidate a session.
