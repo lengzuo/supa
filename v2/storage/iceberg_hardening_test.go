@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -72,6 +74,26 @@ func TestIcebergRejectsDotSegments(t *testing.T) {
 		"Analytics.DeleteBucket ..": func() error { _, err := c.Analytics().DeleteBucket(ctx, ".."); return err },
 		"Analytics.DeleteBucket .":  func() error { _, err := c.Analytics().DeleteBucket(ctx, "."); return err },
 		"Analytics.CreateBucket ..": func() error { _, err := c.Analytics().CreateBucket(ctx, ".."); return err },
+		"Analytics.CreateBucket #":  func() error { _, err := c.Analytics().CreateBucket(ctx, "bucket#1"); return err },
+		"Analytics.CreateBucket /":  func() error { _, err := c.Analytics().CreateBucket(ctx, "a/b"); return err },
+		"Analytics.DeleteBucket %":  func() error { _, err := c.Analytics().DeleteBucket(ctx, "a%2Fb"); return err },
+		"Analytics.DeleteBucket sp": func() error { _, err := c.Analytics().DeleteBucket(ctx, " a"); return err },
+		"DropTable ns 0x1F":         func() error { return cat.DropTable(ctx, tbl([]string{"a\x1fb"}, "t"), nil) },
+		"DropTable ns slash":        func() error { return cat.DropTable(ctx, tbl([]string{"a/b"}, "t"), nil) },
+		"DropTable ns backslash":    func() error { return cat.DropTable(ctx, tbl([]string{`a\b`}, "t"), nil) },
+		"DropTable name slash":      func() error { return cat.DropTable(ctx, tbl([]string{"ns"}, "a/../b"), nil) },
+		"CreateTable name bslash": func() error {
+			_, err := cat.CreateTable(ctx, []string{"ns"}, IcebergCreateTableRequest{Name: `a\b`})
+			return err
+		},
+		"ListNamespaces parent 0x1F": func() error {
+			_, err := cat.ListNamespaces(ctx, &IcebergListNamespacesOptions{Parent: []string{"a\x1fb"}})
+			return err
+		},
+		"ListNamespaces parent ..": func() error {
+			_, err := cat.ListNamespaces(ctx, &IcebergListNamespacesOptions{Parent: []string{".."}})
+			return err
+		},
 	}
 	for name, call := range calls {
 		err := call()
@@ -95,12 +117,12 @@ func TestIcebergRequestURI(t *testing.T) {
 	if err := cat.DropTable(ctx, IcebergTableIdentifier{Namespace: []string{"a b", "c.d"}, Name: "t..1"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.DropNamespace(ctx, []string{"...", "x/y"}); err != nil {
+	if err := cat.DropNamespace(ctx, []string{"...", "x:y?"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"/storage/v1/iceberg/v1/srv-prefix/namespaces/a%20b%1Fc.d/tables/t..1?purgeRequested=false",
-		"/storage/v1/iceberg/v1/srv-prefix/namespaces/...%1Fx%2Fy",
+		"/storage/v1/iceberg/v1/srv-prefix/namespaces/...%1Fx%3Ay%3F",
 	}
 	for i, r := range reqs() {
 		if r.Request.RequestURI != want[i] {
@@ -156,7 +178,9 @@ func TestIcebergServerPrefix(t *testing.T) {
 		}
 		analyticsWriteJSON(w, 200, `{"namespaces":[]}`)
 	})
-	for _, bad := range []string{"../x", "a/%2E%2E", "a/./b", "a?b", "a#b", "a//b", "a b", "a/%zz"} {
+	for _, bad := range []string{"../x", "a/%2E%2E", "a/./b", "a?b", "a#b", "a//b", "a b", "a/%zz",
+		"x|%2F..%2Fadmin", "café%2F..%2Fadmin", "café%2F..", "a{b}", "..%2F..%2F..%2Fauth%2Fv1%2Fadmin",
+		"a%5C..%5Cadmin", `a"b`, "a`b", "a^b", "a\\b", "%2F", "a%2", "a%G0", "a\x00b"} {
 		prefix.Store(bad)
 		cat, _ := c.Analytics().From("bkt")
 		if _, err := cat.ListNamespaces(context.Background(), nil); err == nil {
@@ -167,6 +191,18 @@ func TestIcebergServerPrefix(t *testing.T) {
 		if r.Path != "/storage/v1/iceberg/v1/config" {
 			t.Fatalf("request sent with unsafe prefix: %s", r.Request.RequestURI)
 		}
+	}
+	// An unsafe prefix is not cached: the same catalog refetches config.
+	prefix.Store("x|%2F..%2Fadmin")
+	unsafe, _ := c.Analytics().From("bkt")
+	before := len(reqs())
+	for i := 0; i < 2; i++ {
+		if _, err := unsafe.ListNamespaces(context.Background(), nil); err == nil {
+			t.Fatal("expected error")
+		}
+	}
+	if got := len(reqs()) - before; got != 2 {
+		t.Fatalf("config requests = %d, want 2", got)
 	}
 	n := len(reqs())
 
@@ -333,5 +369,131 @@ func TestIcebergStructTypeJSON(t *testing.T) {
 	var back IcebergType
 	if err := json.Unmarshal(b, &back); err != nil || back.Struct == nil || back.Struct.Fields[0].Name != "lat" {
 		t.Fatalf("round trip = %+v, %v", back, err)
+	}
+}
+
+// iceberg-js: serverPrefix = overrides?.prefix ?? defaults?.prefix; an
+// empty (but present) override falls back to the warehouse.
+func TestIcebergConfigPrefixPrecedence(t *testing.T) {
+	for _, tc := range []struct{ config, want string }{
+		{`{"defaults":{"prefix":"d"},"overrides":{"prefix":""}}`, "/storage/v1/iceberg/v1/bkt/namespaces"},
+		{`{"defaults":{"prefix":"d"},"overrides":{}}`, "/storage/v1/iceberg/v1/d/namespaces"},
+		{`{"defaults":{"prefix":"d"},"overrides":{"prefix":"o"}}`, "/storage/v1/iceberg/v1/o/namespaces"},
+		{`{"defaults":{},"overrides":{"prefix":"/"}}`, "/storage/v1/iceberg/v1/bkt/namespaces"},
+	} {
+		c, reqs := analyticsTestServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			if r.URL.Path == "/storage/v1/iceberg/v1/config" {
+				analyticsWriteJSON(w, 200, tc.config)
+				return
+			}
+			analyticsWriteJSON(w, 200, `{"namespaces":[]}`)
+		})
+		cat, _ := c.Analytics().From("bkt")
+		if _, err := cat.ListNamespaces(context.Background(), nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := reqs()[1].Request.RequestURI; got != tc.want {
+			t.Errorf("config %s: RequestURI = %q, want %q", tc.config, got, tc.want)
+		}
+	}
+}
+
+// The bucket-name fallback is cached only when the server has no usable
+// config endpoint (400/404/405/501); transient failures are retried.
+func TestIcebergConfigFallbackCaching(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		cached bool
+	}{{400, true}, {404, true}, {405, true}, {501, true}, {429, false}, {500, false}, {502, false}, {503, false}} {
+		var configs atomic.Int32
+		c, _ := analyticsTestServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			if r.URL.Path == "/storage/v1/iceberg/v1/config" {
+				configs.Add(1)
+				analyticsWriteJSON(w, tc.status, `{"error":{"message":"x","type":"T","code":0}}`)
+				return
+			}
+			analyticsWriteJSON(w, 200, `{"namespaces":[]}`)
+		})
+		cat, _ := c.Analytics().From("bkt")
+		for i := 0; i < 2; i++ {
+			_, err := cat.ListNamespaces(context.Background(), nil)
+			if tc.cached && err != nil {
+				t.Fatalf("status %d: %v", tc.status, err)
+			}
+			var ie *IcebergError
+			if !tc.cached && (!errors.As(err, &ie) || ie.Status != tc.status) {
+				t.Fatalf("status %d: err = %v", tc.status, err)
+			}
+		}
+		want := int32(2)
+		if tc.cached {
+			want = 1
+		}
+		if configs.Load() != want {
+			t.Errorf("status %d: config requests = %d, want %d", tc.status, configs.Load(), want)
+		}
+	}
+}
+
+// A panic while fetching /v1/config becomes an error and never wedges
+// the catalog.
+func TestIcebergConfigPanicDoesNotWedge(t *testing.T) {
+	var panicking atomic.Bool
+	panicking.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/storage/v1/iceberg/v1/config" {
+			analyticsWriteJSON(w, 200, `{"defaults":{},"overrides":{"prefix":"p"}}`)
+			return
+		}
+		analyticsWriteJSON(w, 200, `{"namespaces":[]}`)
+	}))
+	defer srv.Close()
+	c, err := New(Config{URL: srv.URL + "/storage/v1", APIKey: analyticsTestKey,
+		RequestEditors: []func(*http.Request) error{func(r *http.Request) error {
+			if panicking.Load() && strings.HasSuffix(r.URL.Path, "/v1/config") {
+				panic("editor exploded")
+			}
+			return nil
+		}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, _ := c.Analytics().From("bkt")
+	_, err = cat.ListNamespaces(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("err = %v, want panic converted to error", err)
+	}
+	panicking.Store(false)
+	done := make(chan error, 1)
+	go func() { _, err := cat.ListNamespaces(context.Background(), nil); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("catalog wedged after panic")
+	}
+}
+
+// icebergServerPrefix itself (independently of transport's re-escape
+// guard) must reject anything outside RFC 3986 pchar and any traversal.
+func TestIcebergServerPrefixValidation(t *testing.T) {
+	for _, bad := range []string{
+		"x|%2F..%2Fadmin", "café%2F..", "café%2F..%2Fadmin", "a{b}", "..%2F..%2F..%2Fauth%2Fv1%2Fadmin",
+		"a%5C..", "%2E%2E", "a/%2e", "a`b", `a"b`, "a^b", "a b", "a%2", "a%zz", "a//b", "%2F", "", "/",
+		"a?b", "a#b", `a\b`, "a\x7fb",
+	} {
+		if got, err := icebergServerPrefix(bad); err == nil {
+			t.Errorf("icebergServerPrefix(%q) = %q, want error", bad, got)
+		}
+	}
+	for in, want := range map[string]string{
+		"a%2Fb": "a%2Fb", "/a%2Fb/c/": "a%2Fb/c", "p-1_x.y~z": "p-1_x.y~z", "a:b@c!$&'()*+,;=": "a:b@c!$&'()*+,;=",
+		"..a/b..": "..a/b..", "caf%C3%A9": "caf%C3%A9",
+	} {
+		if got, err := icebergServerPrefix(in); err != nil || got != want {
+			t.Errorf("icebergServerPrefix(%q) = %q, %v; want %q", in, got, err, want)
+		}
 	}
 }

@@ -231,10 +231,10 @@ func TestIcebergDropNamespace(t *testing.T) {
 	cat, reqs := icebergServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	if err := cat.DropNamespace(context.Background(), []string{"a b", "c/d"}); err != nil {
+	if err := cat.DropNamespace(context.Background(), []string{"a b", "c:d"}); err != nil {
 		t.Fatal(err)
 	}
-	icebergAssertRequest(t, reqs()[0], http.MethodDelete, "/storage/v1/iceberg/v1/srv-prefix/namespaces/a%20b%1Fc%2Fd", true)
+	icebergAssertRequest(t, reqs()[0], http.MethodDelete, "/storage/v1/iceberg/v1/srv-prefix/namespaces/a%20b%1Fc%3Ad", true)
 }
 
 // upstream: iceberg-js src/catalog/namespaces.ts loadNamespaceMetadata
