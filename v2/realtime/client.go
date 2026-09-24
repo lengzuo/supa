@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lengzuo/supa/v2/internal/transport"
@@ -90,6 +91,12 @@ type Config struct {
 	Headers http.Header
 	// HTTPClient performs HTTP broadcasts (/api/broadcast).
 	HTTPClient *http.Client
+	// RequestEditors run, in order, on every HTTP broadcast request
+	// (Channel.HTTPSend and the REST fallback of Channel.Send) just before
+	// it is sent, e.g. to inject trace-propagation headers. Returning an
+	// error aborts the request. They do not apply to the websocket
+	// handshake.
+	RequestEditors []func(*http.Request) error
 	// Logger receives debug logs. Nil disables logging. Payloads and
 	// tokens are never logged.
 	Logger *slog.Logger
@@ -134,7 +141,6 @@ type Client struct {
 	httpQuery    url.Values
 	disconnAfter time.Duration
 	disp         dispatcher
-	bg           sync.WaitGroup
 
 	mu                    sync.Mutex
 	conn                  *wsConn
@@ -152,6 +158,9 @@ type Client struct {
 	heartbeatCB           func(HeartbeatStatus, time.Duration)
 	openWaiters           []chan error
 	pendingDisconnect     *ltimer
+	tasks                 map[*bgTask]struct{}
+	bgCtx                 context.Context
+	bgCancel              context.CancelFunc
 
 	accessToken  string
 	manualToken  bool
@@ -231,11 +240,19 @@ func New(cfg Config) (*Client, error) {
 	}
 	httpQuery := httpURL.Query()
 	httpURL.RawQuery = ""
+	cfg.RequestEditors = append([]func(*http.Request) error(nil), cfg.RequestEditors...)
+	editors := make([]transport.RequestEditor, 0, len(cfg.RequestEditors))
+	for _, ed := range cfg.RequestEditors {
+		if ed != nil {
+			editors = append(editors, ed)
+		}
+	}
 	hc, err := transport.New(transport.Config{
 		BaseURL:    httpURL.String(),
 		APIKey:     cfg.APIKey,
 		HTTPClient: cfg.HTTPClient,
 		Headers:    cfg.Headers,
+		Editors:    editors,
 		Logger:     cfg.Logger,
 	})
 	if err != nil {
@@ -268,6 +285,7 @@ func New(cfg Config) (*Client, error) {
 		disconnAfter:  disconnAfter,
 		closeWasClean: true,
 		heartbeatCB:   cfg.HeartbeatCallback,
+		tasks:         map[*bgTask]struct{}{},
 	}
 	c.disp.onPanic = func(v any) {
 		if c.cfg.Logger != nil {
@@ -371,7 +389,7 @@ func (c *Client) transportConnect() {
 		q:          outQueue{notify: make(chan struct{}, 1)},
 	}
 	c.conn = conn
-	go c.runConn(dialCtx, conn)
+	c.goBackground(func(context.Context) { c.runConn(dialCtx, conn) })
 }
 
 // ConnectionState reports the websocket state.
@@ -401,31 +419,89 @@ func (c *Client) isConnected() bool { return c.conn != nil && c.conn.opened }
 
 // Disconnect closes the websocket with code 1000 and stops reconnecting.
 // Channels stay registered and rejoin on the next Connect or Subscribe.
-// It waits until the connection's goroutines have exited or ctx is done.
+//
+// It waits, until ctx is done, for the client's background work to
+// finish: the connection's goroutines, in-flight AccessToken callbacks
+// (whose context is cancelled) and queued user callbacks (OnStatus,
+// broadcast handlers, the Logger). Once Disconnect returns nil none of
+// them runs again unless the client is used again. Called from a user
+// callback, Disconnect does not wait for the callback queue it runs on.
 func (c *Client) Disconnect(ctx context.Context) error {
 	return c.DisconnectWithCode(ctx, wsCloseNormal, "")
 }
 
 // DisconnectWithCode is Disconnect with an explicit close code and reason.
 func (c *Client) DisconnectWithCode(ctx context.Context, code int, reason string) error {
+	self := goroutineID()
 	c.mu.Lock()
+	c.disconnectLocked(code, reason)
+	var pending []<-chan struct{}
+	for t := range c.tasks {
+		if t.gid.Load() != self {
+			pending = append(pending, t.done)
+		}
+	}
+	c.mu.Unlock()
+	for _, done := range pending {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// Callbacks queued by the teardown (CLOSED/CHANNEL_ERROR statuses,
+	// logs) run before Disconnect returns.
+	if idle := c.disp.idle(self); idle != nil {
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// disconnectLocked stops reconnecting, cancels background work and tears
+// the connection down without waiting for it. Requires c.mu.
+func (c *Client) disconnectLocked(code int, reason string) {
 	c.cancelPendingDisconnect()
 	c.connectClock++
 	c.closeWasClean = true
 	c.reconnectTimer.reset()
-	conn := c.conn
-	if conn == nil {
-		c.mu.Unlock()
-		return nil
+	if c.bgCancel != nil {
+		c.bgCancel()
+		c.bgCtx, c.bgCancel = nil, nil
 	}
-	c.teardownConn(conn, code, reason, &CloseError{Code: code, Reason: reason})
-	c.mu.Unlock()
-	select {
-	case <-conn.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	if conn := c.conn; conn != nil {
+		c.teardownConn(conn, code, reason, &CloseError{Code: code, Reason: reason})
 	}
+}
+
+// bgTask is a goroutine started by goBackground.
+type bgTask struct {
+	done chan struct{}
+	gid  atomic.Uint64
+}
+
+// goBackground runs fn on a new goroutine that Disconnect waits for. fn's
+// context is cancelled by Disconnect. Requires c.mu.
+func (c *Client) goBackground(fn func(ctx context.Context)) {
+	if c.bgCtx == nil {
+		c.bgCtx, c.bgCancel = context.WithCancel(context.Background())
+	}
+	ctx := c.bgCtx
+	t := &bgTask{done: make(chan struct{})}
+	c.tasks[t] = struct{}{}
+	go func() {
+		t.gid.Store(goroutineID())
+		defer func() {
+			c.mu.Lock()
+			delete(c.tasks, t)
+			c.mu.Unlock()
+			close(t.done)
+		}()
+		fn(ctx)
+	}()
 }
 
 // Channel returns the channel for topic, creating it if needed. Topics are
@@ -504,17 +580,21 @@ func (c *Client) removeChannel(ch *Channel) {
 	}
 }
 
+// schedulePendingDisconnect arranges the automatic disconnect once the
+// last channel is gone. The teardown itself runs under c.mu, so a channel
+// created (or subscribed) afterwards always gets a fresh connection
+// instead of racing with a stale disconnect. Requires c.mu.
 func (c *Client) schedulePendingDisconnect() {
 	c.cancelPendingDisconnect()
 	if c.disconnAfter < 0 {
-		c.disconnectBackground()
+		c.disconnectLocked(wsCloseNormal, "")
 		return
 	}
 	c.pendingDisconnect = c.after(c.disconnAfter, func() {
 		c.pendingDisconnect = nil
 		if len(c.channels) == 0 {
 			c.log(slog.LevelDebug, "transport", "deferred disconnect fired - no channels, disconnecting")
-			c.disconnectBackground()
+			c.disconnectLocked(wsCloseNormal, "")
 		}
 	})
 }
@@ -524,18 +604,6 @@ func (c *Client) cancelPendingDisconnect() {
 		c.pendingDisconnect.stop()
 		c.pendingDisconnect = nil
 	}
-}
-
-// disconnectBackground disconnects without blocking the caller (which may
-// hold c.mu).
-func (c *Client) disconnectBackground() {
-	c.bg.Add(1)
-	go func() {
-		defer c.bg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.Timeout)
-		defer cancel()
-		_ = c.Disconnect(ctx)
-	}()
 }
 
 // leaveOpenTopic leaves any other joined/joining channel on topic.
@@ -646,10 +714,8 @@ func (c *Client) heartbeatTimeout() {
 // auth (beforeReconnect) and connect.
 func (c *Client) reconnectFire() {
 	clock := c.connectClock
-	c.bg.Add(1)
-	go func() {
-		defer c.bg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.Timeout)
+	c.goBackground(func(bgCtx context.Context) {
+		ctx, cancel := context.WithTimeout(bgCtx, c.cfg.Timeout)
 		_ = c.waitAuth(ctx)
 		cancel()
 		c.mu.Lock()
@@ -657,7 +723,7 @@ func (c *Client) reconnectFire() {
 			c.connectLocked()
 		}
 		c.mu.Unlock()
-	}()
+	})
 }
 
 func (c *Client) onConnOpen(conn *wsConn) {

@@ -362,11 +362,12 @@ func TestSetAuth(t *testing.T) {
 
 func TestSetAuth_Concurrent(t *testing.T) {
 	srv, reqs := newServer(t, nil)
-	go func() {
-		for range reqs {
-		}
-	}()
+	allowed := map[string]bool{"Bearer tok-init": true}
+	for i := 0; i < 8; i++ {
+		allowed[fmt.Sprintf("Bearer tok-%d", i)] = true
+	}
 	c := newClient(t, srv, nil)
+	c.SetAuth("tok-init")
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(2)
@@ -385,6 +386,13 @@ func TestSetAuth_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	// Every request was captured (buffered) before its response was sent.
+	for i := 0; i < 8; i++ {
+		r := <-reqs
+		if a := r.Header.Values("Authorization"); len(a) != 1 || !allowed[a[0]] {
+			t.Errorf("request %d: Authorization = %q, want one of the tokens set", i, a)
+		}
+	}
 }
 
 // upstream: functions-js src/FunctionsClient.ts invoke (text/event-stream returns the raw response)

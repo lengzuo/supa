@@ -344,7 +344,7 @@ func (ch *Channel) Subscribe(ctx context.Context) error {
 	case ChannelJoining, ChannelErrored:
 		w := ch.addWaiter()
 		c.mu.Unlock()
-		return waitErr(ctx, w)
+		return ch.waitSubscribe(ctx, w)
 	}
 	if ch.joinedOnce {
 		c.mu.Unlock()
@@ -399,7 +399,34 @@ func (ch *Channel) Subscribe(ctx context.Context) error {
 	w := ch.addWaiter()
 	ch.join(joinTimeout)
 	c.mu.Unlock()
-	return waitErr(ctx, w)
+	return ch.waitSubscribe(ctx, w)
+}
+
+// waitSubscribe waits for a Subscribe outcome. A waiter abandoned because
+// ctx is done is removed so repeated cancelled Subscribe calls do not
+// accumulate.
+func (ch *Channel) waitSubscribe(ctx context.Context, w chan error) error {
+	select {
+	case err := <-w:
+		return err
+	case <-ctx.Done():
+	}
+	c := ch.client
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, other := range ch.waiters {
+		if other == w {
+			ch.waiters = append(ch.waiters[:i], ch.waiters[i+1:]...)
+			return ctx.Err()
+		}
+	}
+	// Already resolved while ctx was being cancelled: report the outcome.
+	select {
+	case err := <-w:
+		return err
+	default:
+		return ctx.Err()
+	}
 }
 
 func waitErr(ctx context.Context, w chan error) error {
@@ -516,11 +543,15 @@ func (ch *Channel) Send(ctx context.Context, p SendParams) error {
 	if p.Type == "" {
 		p.Type = ListenBroadcast
 	}
+	c := ch.client
 	args := &sendArgs{Type: string(p.Type), Event: p.Event}
 	if p.Payload != nil {
 		args.hasPayload = true
 		switch v := p.Payload.(type) {
 		case []byte:
+			if c.cfg.VSN != VSN2 || p.Type != ListenBroadcast {
+				return fmt.Errorf("realtime: []byte payloads are only supported for broadcasts with protocol %s (got type %q, protocol %s); use json.RawMessage for JSON", VSN2, p.Type, c.cfg.VSN)
+			}
 			args.Payload = append([]byte(nil), v...)
 		case json.RawMessage:
 			if !json.Valid(v) {
@@ -536,7 +567,6 @@ func (ch *Channel) Send(ctx context.Context, p SendParams) error {
 		}
 	}
 	timeout := p.Timeout
-	c := ch.client
 
 	c.mu.Lock()
 	if timeout <= 0 {

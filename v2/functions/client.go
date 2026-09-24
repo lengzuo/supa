@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -136,7 +137,8 @@ type InvokeOptions struct {
 	Region Region
 	// Body is the request payload. Unless Headers sets Content-Type, it is
 	// sent as follows:
-	//   - nil or "": no body
+	//   - nil, "", an empty []byte, or a nil pointer, map, slice or
+	//     interface value: no body (upstream sends no body for falsy values)
 	//   - string: text/plain
 	//   - []byte or io.Reader: application/octet-stream (readers are streamed)
 	//   - url.Values: application/x-www-form-urlencoded
@@ -144,9 +146,22 @@ type InvokeOptions struct {
 	// For multipart/form-data, pass the encoded body as an io.Reader and set
 	// the Content-Type header (with boundary) from mime/multipart.Writer.
 	Body any
-	// Timeout aborts the invocation after this duration when > 0. It covers
-	// reading the response body; the deadline is released when the
-	// response is closed.
+	// Timeout aborts the invocation after this duration when > 0.
+	//
+	// It bounds the whole exchange, including reading the response body:
+	// the deadline stays armed until the Response is closed, so reading a
+	// long-lived stream (e.g. text/event-stream) fails with
+	// context.DeadlineExceeded once it expires. This differs from upstream
+	// functions-js, which clears its timeout once the response headers
+	// arrive for streamed responses. To bound only the wait for the
+	// response headers, leave Timeout zero and pass a cancellable ctx
+	// together with a timer that you stop once Invoke returns:
+	//
+	//	ctx, cancel := context.WithCancel(ctx)
+	//	defer cancel() // ends the stream when you are done with it
+	//	t := time.AfterFunc(10*time.Second, cancel)
+	//	resp, err := client.Invoke(ctx, "stream", opts)
+	//	t.Stop() // headers arrived (or Invoke failed): stop the timer
 	Timeout time.Duration
 }
 
@@ -181,7 +196,7 @@ func (r *Response) Bytes() ([]byte, error) {
 	defer func() { _ = r.Body.Close() }()
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		return data, &FetchError{Err: err}
+		return data, &FetchError{Err: err, op: opReadBody}
 	}
 	return data, nil
 }
@@ -278,10 +293,15 @@ func (c *Client) Invoke(ctx context.Context, name string, opts *InvokeOptions) (
 	})
 	if err != nil {
 		cancel()
-		return nil, &FetchError{Err: err}
+		op := opSend
+		if transport.IsPreSend(err) {
+			op = opPrepare
+		}
+		return nil, &FetchError{Err: err, op: op}
 	}
 
-	if strings.EqualFold(resp.Header.Get(headerRelayError), "true") {
+	// Upstream compares the header value exactly: `isRelayError === 'true'`.
+	if resp.Header.Get(headerRelayError) == "true" {
 		data := readErrorBody(resp.Body)
 		cancel()
 		return nil, &RelayError{StatusCode: resp.StatusCode, Header: resp.Header, Body: data}
@@ -334,15 +354,19 @@ func functionPath(name string) (string, url.Values, error) {
 // encodeBody maps an InvokeOptions.Body to a transport body and its default
 // content type, following upstream functions-js rules.
 func encodeBody(b any) (any, string, error) {
-	switch v := b.(type) {
-	case nil:
+	if isNilValue(b) {
 		return nil, "", nil
+	}
+	switch v := b.(type) {
 	case string:
 		if v == "" {
 			return nil, "", nil
 		}
 		return v, contentTypeText, nil
 	case []byte:
+		if len(v) == 0 {
+			return nil, "", nil
+		}
 		return v, contentTypeBinary, nil
 	case io.Reader:
 		return v, contentTypeBinary, nil
@@ -355,6 +379,21 @@ func encodeBody(b any) (any, string, error) {
 		}
 		return data, transport.ContentTypeJSON, nil
 	}
+}
+
+// isNilValue reports whether b is nil or a nil pointer, map, slice,
+// interface, channel or func: the Go counterparts of JavaScript's null and
+// undefined, for which upstream sends no body.
+func isNilValue(b any) bool {
+	if b == nil {
+		return true
+	}
+	v := reflect.ValueOf(b)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface, reflect.Chan, reflect.Func:
+		return v.IsNil()
+	}
+	return false
 }
 
 // canonicalHeader returns a copy of h with canonical keys so that lookups

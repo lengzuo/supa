@@ -124,11 +124,9 @@ func (c *Client) setAuthSafely() {
 	if c.manualToken || c.cfg.AccessToken == nil {
 		return
 	}
-	c.bg.Add(1)
-	go func() {
-		defer c.bg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.Timeout)
+	c.goBackground(func(bgCtx context.Context) {
+		ctx, cancel := context.WithTimeout(bgCtx, c.cfg.Timeout)
 		defer cancel()
 		_ = c.SetAuth(ctx, "")
-	}()
+	})
 }

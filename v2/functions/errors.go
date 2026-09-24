@@ -10,19 +10,45 @@ import (
 // maxErrorBody bounds how much of an error response body is buffered.
 const maxErrorBody = 1 << 20
 
-// FetchError reports that the request never produced an HTTP response: a
-// network failure, a cancelled or expired context (including
-// InvokeOptions.Timeout), or a failure obtaining the access token. It
-// corresponds to upstream FunctionsFetchError.
+// FetchError reports a request or response-body transport failure: the
+// request could not be prepared (the AccessToken callback or a request
+// editor failed), it never produced an HTTP response (a network failure,
+// or a cancelled or expired context, including InvokeOptions.Timeout), or
+// reading the response body failed (returned by Response.Bytes, Text and
+// DecodeJSON). It corresponds to upstream FunctionsFetchError.
 //
 // Err is the underlying cause, so errors.Is(err, context.DeadlineExceeded)
 // and errors.Is(err, context.Canceled) work through it.
 type FetchError struct {
 	Err error
+
+	op fetchOp
 }
 
+// fetchOp is the stage of the invocation that failed.
+type fetchOp int
+
+const (
+	opSend fetchOp = iota
+	opPrepare
+	opReadBody
+)
+
+// Error implements error. The message names the stage that failed.
 func (e *FetchError) Error() string {
-	return "functions: failed to send a request to the Edge Function: " + e.Err.Error()
+	var what string
+	switch e.op {
+	case opPrepare:
+		what = "failed to prepare the request to the Edge Function"
+	case opReadBody:
+		what = "failed to read the Edge Function response body"
+	default:
+		what = "failed to send a request to the Edge Function"
+	}
+	if e.Err == nil {
+		return "functions: " + what
+	}
+	return "functions: " + what + ": " + e.Err.Error()
 }
 
 // Unwrap returns the underlying cause.
@@ -40,6 +66,7 @@ type RelayError struct {
 	Body []byte
 }
 
+// Error implements error.
 func (e *RelayError) Error() string {
 	return fmt.Sprintf("functions: relay error invoking the Edge Function (status %d)", e.StatusCode)
 }
@@ -59,6 +86,7 @@ type HTTPError struct {
 	Body []byte
 }
 
+// Error implements error.
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("functions: Edge Function returned a non-2xx status code (status %d)", e.StatusCode)
 }
