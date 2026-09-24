@@ -220,9 +220,15 @@ func toError(err error, namespace string) error {
 		}
 	}
 	out.Code = str("code")
+	// "statusCode" wins when present and non-empty, then "code", then the
+	// HTTP status (storage-js: err.statusCode || err.code || status).
 	switch v := body["statusCode"].(type) {
 	case string:
-		out.StatusCode = v
+		if v != "" {
+			out.StatusCode = v
+		} else if out.Code != "" {
+			out.StatusCode = out.Code
+		}
 	case float64:
 		out.StatusCode = strconv.Itoa(int(v))
 	default:

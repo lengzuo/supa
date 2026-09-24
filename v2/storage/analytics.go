@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -91,6 +90,9 @@ func (a *AnalyticsAPI) CreateBucket(ctx context.Context, name string) (*Analytic
 	if a.err != nil {
 		return nil, a.err
 	}
+	if err := icebergCheckSegment("bucket name", name); err != nil {
+		return nil, err
+	}
 	var out AnalyticsBucket
 	_, err := request(ctx, a.t, &transport.Request{
 		Method: http.MethodPost,
@@ -143,8 +145,8 @@ func (a *AnalyticsAPI) DeleteBucket(ctx context.Context, name string) (*Analytic
 	if a.err != nil {
 		return nil, a.err
 	}
-	if name == "" {
-		return nil, errors.New("storage: analytics bucket name is required")
+	if err := icebergCheckSegment("bucket name", name); err != nil {
+		return nil, err
 	}
 	var out AnalyticsMessageResponse
 	_, err := request(ctx, a.t, &transport.Request{
@@ -162,24 +164,27 @@ func (a *AnalyticsAPI) DeleteBucket(ctx context.Context, name string) (*Analytic
 // bucketName (the Iceberg "warehouse"). It performs no I/O. It returns an
 // error when bucketName does not satisfy the Storage bucket naming rules
 // (1-100 characters, no path separators, no leading or trailing
-// whitespace, only letters, digits and the characters _ ! - . * ' ( ) space
-// & $ @ = ; : + , ?).
+// whitespace, not "." or "..", only letters, digits and the characters
+// _ ! - . * ' ( ) space & $ @ = ; : + , ?). The error is an
+// *AnalyticsArgumentError.
 func (a *AnalyticsAPI) From(bucketName string) (*IcebergCatalog, error) {
 	if a.err != nil {
 		return nil, a.err
 	}
 	if !analyticsValidBucketName(bucketName) {
-		return nil, errors.New("storage: invalid bucket name: file, folder, and bucket names must follow " +
-			"AWS object key naming guidelines and should avoid the use of any other characters")
+		return nil, &AnalyticsArgumentError{Argument: "bucket name", Reason: "file, folder, and bucket names must follow " +
+			"AWS object key naming guidelines and should avoid the use of any other characters, " +
+			`and must not be "." or ".."`}
 	}
 	return &IcebergCatalog{t: a.t, warehouse: bucketName}, nil
 }
 
 var analyticsBucketNameRE = regexp.MustCompile(`^[\w!.*'() &$@=;:+,?-]+$`)
 
-// analyticsValidBucketName mirrors storage-js isValidBucketName.
+// analyticsValidBucketName mirrors storage-js isValidBucketName, and additionally rejects the
+// dot-segments "." and "..", which would alter the request path.
 func analyticsValidBucketName(name string) bool {
-	if name == "" || utf8.RuneCountInString(name) > 100 {
+	if name == "" || name == "." || name == ".." || utf8.RuneCountInString(name) > 100 {
 		return false
 	}
 	if strings.TrimSpace(name) != name {

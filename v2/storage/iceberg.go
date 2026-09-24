@@ -24,16 +24,62 @@ import (
 // AnalyticsAPI.From. It sends the same apikey and Authorization headers as
 // the Storage client and is safe for concurrent use.
 //
-// On first use the catalog calls GET /v1/config?warehouse=<bucket> and
-// uses the server-provided "prefix" (overrides, then defaults) for every
-// later path, falling back to the bucket name when the server does not
-// provide one or answers with an error.
+// Wire behavior follows iceberg-js 1.0.0 (the Iceberg REST spec), not the
+// iceberg-js ^0.8.1 that storage-js currently pins: 0.8.1 lacks
+// RenameTable, RegisterTable and UpdateNamespaceProperties and never calls
+// /v1/config. Concretely:
+//
+//   - On first use the catalog calls GET /v1/config?warehouse=<bucket> and
+//     uses the server-provided "prefix" (overrides, then defaults)
+//     verbatim for every later path. Concurrent first callers share one
+//     config request, and each caller still honors its own context.
+//   - It falls back to the bucket name when the server provides no prefix
+//     or answers /v1/config with an HTTP error other than 401, 403 or 419;
+//     that fallback is cached. Auth errors, network errors and context
+//     errors are returned and are not cached, so the next call retries.
+//     (iceberg-js caches the fallback after any failure.)
+//   - Namespace levels, table names and the bucket name must not be
+//     empty, "." or ".."; such arguments fail with *AnalyticsArgumentError
+//     before any request is sent, so no dot-segment can reach the path.
 type IcebergCatalog struct {
 	t         *transport.Client
 	warehouse string
 
-	mu     sync.Mutex
-	prefix string // "v1/<prefix>" once resolved
+	mu       sync.Mutex
+	prefix   string             // "/v1/<prefix>" once resolved
+	inflight *icebergConfigCall // non-nil while a config request runs
+}
+
+// icebergConfigCall is a single-flight /v1/config resolution.
+type icebergConfigCall struct {
+	done   chan struct{}
+	prefix string
+	err    error
+}
+
+// AnalyticsArgumentError reports an invalid argument to an analytics or
+// Iceberg catalog call. It is returned before any request is sent.
+type AnalyticsArgumentError struct {
+	// Argument names the offending argument, e.g. "table name".
+	Argument string
+	// Reason explains why it was rejected.
+	Reason string
+}
+
+func (e *AnalyticsArgumentError) Error() string {
+	return "storage: invalid " + e.Argument + ": " + e.Reason
+}
+
+// icebergCheckSegment rejects values that are empty or would form a
+// dot-segment ("." or "..") in a URL path.
+func icebergCheckSegment(argument, s string) error {
+	switch s {
+	case "":
+		return &AnalyticsArgumentError{Argument: argument, Reason: "must not be empty"}
+	case ".", "..":
+		return &AnalyticsArgumentError{Argument: argument, Reason: `must not be "." or ".."`}
+	}
+	return nil
 }
 
 // Warehouse returns the analytics bucket name the catalog is scoped to.
@@ -140,8 +186,8 @@ func icebergEscape(s string) string {
 // icebergNamespacePath encodes a multi-level namespace as one path segment
 // with levels separated by the unit separator (%1F), per the REST spec.
 func icebergNamespacePath(ns []string) (string, error) {
-	if len(ns) == 0 {
-		return "", errors.New("storage: iceberg namespace must have at least one level")
+	if err := icebergCheckNamespace(ns); err != nil {
+		return "", err
 	}
 	parts := make([]string, len(ns))
 	for i, p := range ns {
@@ -150,13 +196,26 @@ func icebergNamespacePath(ns []string) (string, error) {
 	return strings.Join(parts, "%1F"), nil
 }
 
+// icebergCheckNamespace validates every level of a namespace.
+func icebergCheckNamespace(ns []string) error {
+	if len(ns) == 0 {
+		return &AnalyticsArgumentError{Argument: "namespace", Reason: "must have at least one level"}
+	}
+	for _, p := range ns {
+		if err := icebergCheckSegment("namespace level", p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func icebergTablePath(id IcebergTableIdentifier) (string, error) {
 	ns, err := icebergNamespacePath(id.Namespace)
 	if err != nil {
 		return "", err
 	}
-	if id.Name == "" {
-		return "", errors.New("storage: iceberg table name is required")
+	if err := icebergCheckSegment("table name", id.Name); err != nil {
+		return "", err
 	}
 	return "/namespaces/" + ns + "/tables/" + icebergEscape(id.Name), nil
 }
@@ -177,34 +236,105 @@ func (c *IcebergCatalog) LoadConfig(ctx context.Context) (*IcebergCatalogConfig,
 }
 
 // resolvePrefix returns "/v1/<prefix>", loading it from /v1/config once.
-// A definitive HTTP error from /v1/config caches the bucket-name fallback;
-// network and context errors are returned and retried on the next call.
+// Concurrent callers share one in-flight request; every caller waits on
+// its own ctx, so a hung config request never blocks a caller past its
+// deadline. See IcebergCatalog for the caching rules.
 func (c *IcebergCatalog) resolvePrefix(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.prefix != "" {
-		return c.prefix, nil
+	for {
+		c.mu.Lock()
+		if c.prefix != "" {
+			p := c.prefix
+			c.mu.Unlock()
+			return p, nil
+		}
+		call := c.inflight
+		if call == nil {
+			call = &icebergConfigCall{done: make(chan struct{})}
+			c.inflight = call
+			c.mu.Unlock()
+			p, cache, err := c.fetchPrefix(ctx)
+			c.mu.Lock()
+			if cache {
+				c.prefix = p
+			}
+			c.inflight = nil
+			call.prefix, call.err = p, err
+			close(call.done)
+			c.mu.Unlock()
+			return p, err
+		}
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-call.done:
+		}
+		if call.err == nil {
+			return call.prefix, nil
+		}
+		// The leader's own context ended; retry under ours.
+		if errors.Is(call.err, context.Canceled) || errors.Is(call.err, context.DeadlineExceeded) {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			continue
+		}
+		return "", call.err
 	}
+}
+
+// fetchPrefix loads /v1/config and reports whether the result may be
+// cached.
+func (c *IcebergCatalog) fetchPrefix(ctx context.Context) (prefix string, cache bool, err error) {
 	fallback := "/v1/" + url.PathEscape(c.warehouse)
 	cfg, err := c.LoadConfig(ctx)
 	if err != nil {
 		var ie *IcebergError
 		if !errors.As(err, &ie) {
-			return "", err
+			return "", false, err
 		}
-		c.prefix = fallback
-		return c.prefix, nil
+		switch ie.Status {
+		case http.StatusUnauthorized, http.StatusForbidden, 419:
+			return "", false, err
+		}
+		return fallback, true, nil
 	}
 	p := cfg.Overrides["prefix"]
 	if p == "" {
 		p = cfg.Defaults["prefix"]
 	}
 	if p == "" {
-		c.prefix = fallback
-	} else {
-		c.prefix = "/v1/" + transport.PathEscape(strings.Trim(p, "/"))
+		return fallback, true, nil
 	}
-	return c.prefix, nil
+	p, err = icebergServerPrefix(p)
+	if err != nil {
+		return "", false, err
+	}
+	return "/v1/" + p, true, nil
+}
+
+// icebergServerPrefix validates a server-provided prefix. The prefix is
+// already URL-encoded per the REST spec, so after trimming slashes it is
+// used verbatim; segments that are empty or decode to "." or ".." and
+// characters that would end the path are rejected.
+func icebergServerPrefix(p string) (string, error) {
+	p = strings.Trim(p, "/")
+	bad := fmt.Errorf("storage: iceberg server returned an unusable catalog prefix %q", p)
+	if p == "" || strings.ContainsAny(p, "?#\\") {
+		return "", bad
+	}
+	for _, seg := range strings.Split(p, "/") {
+		dec, err := url.PathUnescape(seg)
+		if err != nil || seg == "" || dec == "." || dec == ".." {
+			return "", bad
+		}
+		for _, r := range seg {
+			if r <= ' ' || r == 0x7f {
+				return "", bad
+			}
+		}
+	}
+	return p, nil
 }
 
 // do sends a catalog request relative to the resolved prefix.
@@ -249,8 +379,8 @@ func (c *IcebergCatalog) ListNamespaces(ctx context.Context, opts *IcebergListNa
 
 // CreateNamespace creates namespace with optional properties.
 func (c *IcebergCatalog) CreateNamespace(ctx context.Context, namespace []string, properties map[string]string) (*IcebergNamespaceResponse, error) {
-	if len(namespace) == 0 {
-		return nil, errors.New("storage: iceberg namespace must have at least one level")
+	if err := icebergCheckNamespace(namespace); err != nil {
+		return nil, err
 	}
 	body := struct {
 		Namespace  []string          `json:"namespace"`
@@ -374,8 +504,8 @@ func (c *IcebergCatalog) CreateTable(ctx context.Context, namespace []string, re
 	if err != nil {
 		return nil, err
 	}
-	if req.Name == "" {
-		return nil, errors.New("storage: iceberg table name is required")
+	if err := icebergCheckSegment("table name", req.Name); err != nil {
+		return nil, err
 	}
 	return c.loadTableResult(ctx, &transport.Request{
 		Method: http.MethodPost,
@@ -403,8 +533,11 @@ func (c *IcebergCatalog) RegisterTable(ctx context.Context, namespace []string, 
 	if err != nil {
 		return nil, err
 	}
-	if req.Name == "" || req.MetadataLocation == "" {
-		return nil, errors.New("storage: iceberg register table requires a name and metadata location")
+	if err := icebergCheckSegment("table name", req.Name); err != nil {
+		return nil, err
+	}
+	if req.MetadataLocation == "" {
+		return nil, &AnalyticsArgumentError{Argument: "metadata location", Reason: "must not be empty"}
 	}
 	return c.loadTableResult(ctx, &transport.Request{
 		Method: http.MethodPost,
@@ -488,6 +621,12 @@ func (c *IcebergCatalog) UpdateTable(ctx context.Context, id IcebergTableIdentif
 
 // RenameTable renames (and possibly moves) a table.
 func (c *IcebergCatalog) RenameTable(ctx context.Context, source, destination IcebergTableIdentifier) error {
+	if _, err := icebergTablePath(source); err != nil {
+		return err
+	}
+	if _, err := icebergTablePath(destination); err != nil {
+		return err
+	}
 	body := struct {
 		Source      IcebergTableIdentifier `json:"source"`
 		Destination IcebergTableIdentifier `json:"destination"`

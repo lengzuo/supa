@@ -419,6 +419,13 @@ func (b vectorScoped[T]) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	opts = bytes.TrimSpace(opts)
+	if bytes.Equal(opts, []byte("null")) {
+		return head, nil
+	}
+	if len(opts) < 2 || opts[0] != '{' || opts[len(opts)-1] != '}' {
+		return nil, fmt.Errorf("storage: vector options must encode to a JSON object, got %s", opts)
+	}
 	inner := bytes.TrimSpace(opts[1 : len(opts)-1])
 	if len(inner) == 0 {
 		return head, nil

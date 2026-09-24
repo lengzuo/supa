@@ -1,13 +1,24 @@
+# Deliberate divergences from storage-js (see storage.IcebergCatalog docs):
+# - The Iceberg catalog follows iceberg-js 1.0.0 / the Iceberg REST spec,
+#   while storage-js pins iceberg-js ^0.8.1 (which lacks renameTable,
+#   registerTable and updateNamespaceProperties and never calls /v1/config).
+# - /v1/config is fetched once per catalog (single-flight, each caller
+#   honors its own context). The bucket-name fallback prefix is cached only
+#   when the server returns no prefix or a non-auth HTTP error; 401/403/419,
+#   network and context errors are returned and retried on the next call.
+#   The server prefix is used verbatim; unsafe prefixes are rejected.
+# - Empty, "." and ".." bucket names, namespace levels and table names are
+#   rejected with *storage.AnalyticsArgumentError before any request.
 features:
   storage.analytics.create_analytics_bucket:
     status: implemented
     symbols: [storage.Client.Analytics, storage.AnalyticsAPI.CreateBucket]
-    tests: [TestAnalyticsCreateBucket, TestAnalyticsBucketError]
+    tests: [TestAnalyticsCreateBucket, TestAnalyticsBucketError, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.delete_analytics_bucket:
     status: implemented
     symbols: [storage.AnalyticsAPI.DeleteBucket]
-    tests: [TestAnalyticsDeleteBucket]
+    tests: [TestAnalyticsDeleteBucket, TestAnalyticsRequestURI, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.list_analytics_buckets:
     status: implemented
@@ -17,12 +28,12 @@ features:
   storage.analytics.access_catalog:
     status: implemented
     symbols: [storage.AnalyticsAPI.From, storage.IcebergCatalog, storage.IcebergCatalog.LoadConfig]
-    tests: [TestAnalyticsFrom, TestIcebergAccessCatalog, TestIcebergPrefixFallback, TestIcebergErrorMapping, TestIcebergContextCanceled]
+    tests: [TestAnalyticsFrom, TestIcebergAccessCatalog, TestIcebergPrefixFallback, TestIcebergErrorMapping, TestIcebergContextCanceled, TestIcebergServerPrefix, TestIcebergConfigAuthErrorNotCached, TestIcebergConfigHangHonorsContext, TestIcebergConfigLeaderCanceled, TestAnalyticsRequestURI]
     reason: ""
   storage.analytics.create_namespace:
     status: implemented
     symbols: [storage.IcebergCatalog.CreateNamespace, storage.IcebergCatalog.CreateNamespaceIfNotExists]
-    tests: [TestIcebergCreateNamespace, TestIcebergCreateNamespaceIfNotExists]
+    tests: [TestIcebergCreateNamespace, TestIcebergCreateNamespaceIfNotExists, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.list_namespaces:
     status: implemented
@@ -32,62 +43,62 @@ features:
   storage.analytics.delete_namespace:
     status: implemented
     symbols: [storage.IcebergCatalog.DropNamespace]
-    tests: [TestIcebergDropNamespace]
+    tests: [TestIcebergDropNamespace, TestIcebergRejectsDotSegments, TestIcebergRequestURI]
     reason: ""
   storage.analytics.load_namespace_metadata:
     status: implemented
     symbols: [storage.IcebergCatalog.LoadNamespaceMetadata]
-    tests: [TestIcebergLoadNamespaceMetadata]
+    tests: [TestIcebergLoadNamespaceMetadata, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.namespace_exists:
     status: implemented
     symbols: [storage.IcebergCatalog.NamespaceExists]
-    tests: [TestIcebergNamespaceExists]
+    tests: [TestIcebergNamespaceExists, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.update_namespace_properties:
     status: implemented
     symbols: [storage.IcebergCatalog.UpdateNamespaceProperties, storage.IcebergUpdateNamespacePropertiesParams]
-    tests: [TestIcebergUpdateNamespaceProperties]
+    tests: [TestIcebergUpdateNamespaceProperties, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.create_table:
     status: implemented
     symbols: [storage.IcebergCatalog.CreateTable, storage.IcebergCatalog.CreateTableIfNotExists, storage.IcebergCreateTableRequest]
-    tests: [TestIcebergCreateTable, TestIcebergCreateTableIfNotExists, TestIcebergTypeJSON]
+    tests: [TestIcebergCreateTable, TestIcebergCreateTableIfNotExists, TestIcebergTypeJSON, TestIcebergRejectsDotSegments, TestIcebergStructTypeJSON]
     reason: ""
   storage.analytics.list_tables:
     status: implemented
     symbols: [storage.IcebergCatalog.ListTables]
-    tests: [TestIcebergListTables]
+    tests: [TestIcebergListTables, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.load_table:
     status: implemented
     symbols: [storage.IcebergCatalog.LoadTable, storage.IcebergLoadTableOptions]
-    tests: [TestIcebergLoadTable]
+    tests: [TestIcebergLoadTable, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.update_table:
     status: implemented
     symbols: [storage.IcebergCatalog.UpdateTable, storage.IcebergCommitTableRequest, storage.IcebergTableUpdate, storage.IcebergTableRequirement]
-    tests: [TestIcebergUpdateTable, TestIcebergTypeJSON]
+    tests: [TestIcebergUpdateTable, TestIcebergTypeJSON, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.rename_table:
     status: implemented
     symbols: [storage.IcebergCatalog.RenameTable]
-    tests: [TestIcebergRenameTable]
+    tests: [TestIcebergRenameTable, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.delete_table:
     status: implemented
     symbols: [storage.IcebergCatalog.DropTable, storage.IcebergDropTableOptions]
-    tests: [TestIcebergDropTable]
+    tests: [TestIcebergDropTable, TestIcebergRejectsDotSegments, TestIcebergRequestURI]
     reason: ""
   storage.analytics.register_table:
     status: implemented
     symbols: [storage.IcebergCatalog.RegisterTable, storage.IcebergRegisterTableRequest]
-    tests: [TestIcebergRegisterTable]
+    tests: [TestIcebergRegisterTable, TestIcebergRejectsDotSegments]
     reason: ""
   storage.analytics.table_exists:
     status: implemented
     symbols: [storage.IcebergCatalog.TableExists]
-    tests: [TestIcebergTableExists]
+    tests: [TestIcebergTableExists, TestIcebergRejectsDotSegments]
     reason: ""
   storage.vector_buckets.create_vector_bucket:
     status: implemented
@@ -117,7 +128,7 @@ features:
   storage.vector_buckets.get_index:
     status: implemented
     symbols: [storage.VectorBucketScope.GetIndex]
-    tests: [TestVectorsGetIndex]
+    tests: [TestVectorsGetIndex, TestVectorsErrorEmptyStatusCode]
     reason: ""
   storage.vector_buckets.list_indexes:
     status: implemented
@@ -142,12 +153,12 @@ features:
   storage.vector_buckets.list_vectors:
     status: implemented
     symbols: [storage.VectorIndexScope.ListVectors, storage.VectorListVectorsOptions]
-    tests: [TestVectorsListVectors]
+    tests: [TestVectorsListVectors, TestVectorScopedMarshal]
     reason: ""
   storage.vector_buckets.parallel_scan:
     status: implemented
     symbols: [storage.VectorIndexScope.ListVectors, storage.VectorListVectorsOptions, storage.VectorIndexScope.ParallelScan]
-    tests: [TestVectorsListVectors, TestVectorsParallelScan]
+    tests: [TestVectorsListVectors, TestVectorsParallelScan, TestVectorsParallelScanCancelsOnFirstError, TestVectorsParallelScanContextCanceled]
     reason: ""
   storage.vector_buckets.query_vectors:
     status: implemented
