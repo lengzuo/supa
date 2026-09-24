@@ -95,8 +95,13 @@ compliance YAML.
    GoTrue revokes the whole session on reuse.
 4. **Auth events are queued under `sessionMu` in commit order** and delivered
    before the caller returns; never notify while holding a lock.
-5. **Never hold a mutex across network I/O**; use single-flight with
-   context-aware waiting.
+5. **Don't hold a mutex across network I/O**; use single-flight with
+   context-aware waiting. The one deliberate exception is `auth`'s
+   `rotateMu`, which serializes every request that makes GoTrue rotate the
+   refresh token (refresh, MFA verify), exactly like auth-js's
+   `_acquireLock`. Lock order is `rotateMu → sessionMu → evMu`; never
+   deliver events or call anything that may need `rotateMu` while holding
+   it.
 6. **Headers are canonicalised and cloned per request.** A shared
    `http.Header` leaked tokens between users in v1.
 7. **Redact secrets inside wrapped errors too** (`*url.Error.URL`), not just
