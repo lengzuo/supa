@@ -37,11 +37,21 @@ func AuthToken(token string) HeaderOption {
 	}
 }
 
+// NewPostgres creates a PostgREST client for the given Supabase project ref.
+//
+// If projectRef does not form a valid URL, NewPostgres no longer panics: it
+// logs an error and returns a client whose requests fail with a URL error
+// when executed.
 func NewPostgres(projectRef string, opts ...PostgresOption) *PostgresClient {
 	apiHost := fmt.Sprintf(apiHostFormat, projectRef)
 	base, err := url.Parse(apiHost + restAPIPath)
 	if err != nil {
-		panic(fmt.Sprintf("invalid url provided in postgres new"))
+		logger.Error("invalid project ref provided in postgres new: %s", err)
+		base = &url.URL{
+			Scheme: "https",
+			Host:   projectRef + ".supabase.co",
+			Path:   restAPIPath,
+		}
 	}
 	impl := &PostgresClient{
 		httpClient:     defaultSender(connectionTimeout, make(map[string]string)),

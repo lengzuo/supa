@@ -35,7 +35,10 @@ var (
 		"error": colorize(levelError, colorRed),
 		"fatal": colorize(levelFatal, colorGreen),
 	}
-	logger *zeroLogger
+	// logger defaults to a disabled logger so that components constructed
+	// directly (NewAuth, NewPostgres, NewStorage) without New never hit a nil
+	// logger. New replaces it according to Config.Debug.
+	logger = buildLogger(false)
 )
 
 type zeroLogger struct {
@@ -43,13 +46,17 @@ type zeroLogger struct {
 }
 
 func newLogger(debug bool) {
-	logger = &zeroLogger{zerolog.New(os.Stdout).With().CallerWithSkipFrameCount(3).Timestamp().Logger()}
+	logger = buildLogger(debug)
+}
+
+func buildLogger(debug bool) *zeroLogger {
+	l := &zeroLogger{zerolog.New(os.Stdout).With().CallerWithSkipFrameCount(3).Timestamp().Logger()}
 	if debug {
-		logger.SetLevel(int8(zerolog.DebugLevel))
+		l.SetLevel(int8(zerolog.DebugLevel))
 	} else {
-		logger.SetLevel(int8(zerolog.Disabled))
+		l.SetLevel(int8(zerolog.Disabled))
 	}
-	logger.setOutput(zerolog.ConsoleWriter{
+	l.setOutput(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: time.RFC3339Nano,
 		FormatLevel: func(i interface{}) string {
@@ -66,11 +73,7 @@ func newLogger(debug bool) {
 			return colorize(lv, colorBlue)
 		},
 	})
-}
-
-// withPrefix set a tag to zeroLogger
-func (l *zeroLogger) withPrefix(prefix string) {
-	l.zeroLogger = l.zeroLogger.With().Str(Tag, prefix).Logger()
+	return l
 }
 
 // colorize returns the string s wrapped in ANSI code c

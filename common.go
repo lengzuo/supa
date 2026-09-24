@@ -3,20 +3,11 @@ package supabase
 import (
 	"bytes"
 	"net/http"
-
-	"golang.org/x/exp/constraints"
 )
 
 const (
 	apiHostFormat = "https://%s.supabase.co"
 )
-
-func min[T constraints.Ordered](a, b T) T {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 type Resp struct {
 	Body       bytes.Buffer
