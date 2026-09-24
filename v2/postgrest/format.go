@@ -32,13 +32,17 @@ func formatValue(v any) (string, error) {
 // The rules, in order:
 //
 //  1. nil, nil pointers and nil interfaces are null.
-//  2. json.RawMessage and []byte are used verbatim; time.Time is RFC 3339.
+//  2. json.RawMessage and []byte are used verbatim; time.Time and
+//     *time.Time are RFC 3339; time.Duration is an interval literal in
+//     microseconds (see formatInterval).
 //  3. encoding.TextMarshaler, then driver.Valuer (e.g. sql.NullString,
 //     uuid types), use the text or database value they produce.
 //  4. Basic kinds use their literal form, even when the type has a
 //     String method: a stringer-style int enum is sent as its number,
 //     which is what the database column holds.
-//  5. Other pointers are dereferenced.
+//  5. A pointer whose String method is on the pointer (*url.URL) uses
+//     it, unless it points to a basic kind; other pointers are
+//     dereferenced.
 //  6. fmt.Stringer is used for the remaining (non-basic) kinds.
 //  7. Slices and arrays are comma-joined.
 //  8. Anything else (maps, structs) is JSON; JavaScript would print
@@ -61,6 +65,12 @@ func formatScalar(v any, depth int) (s string, null bool, err error) {
 		return string(x), false, nil
 	case time.Time:
 		return x.Format(time.RFC3339Nano), false, nil
+	case *time.Time:
+		return x.Format(time.RFC3339Nano), false, nil
+	case time.Duration:
+		return formatInterval(x), false, nil
+	case *time.Duration:
+		return formatInterval(*x), false, nil
 	case encoding.TextMarshaler:
 		b, err := x.MarshalText()
 		if err != nil {
@@ -86,6 +96,12 @@ func formatScalar(v any, depth int) (s string, null bool, err error) {
 	case reflect.String:
 		return rv.String(), false, nil
 	case reflect.Pointer, reflect.Interface:
+		// A pointer-receiver String method (*url.URL, *bytes.Buffer) is
+		// lost by dereferencing, so use it here, unless the pointee is a
+		// basic kind (a *Status enum is still sent as its number).
+		if x, ok := v.(fmt.Stringer); ok && !isBasicKind(rv.Elem().Kind()) {
+			return x.String(), false, nil
+		}
 		return formatScalar(rv.Elem().Interface(), depth+1)
 	}
 	if x, ok := v.(fmt.Stringer); ok {
@@ -109,6 +125,36 @@ func formatScalar(v any, depth int) (s string, null bool, err error) {
 		}
 		return string(b), false, nil
 	}
+}
+
+func isBasicKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Bool, reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+// formatInterval renders d as a Postgres interval literal in microseconds
+// (the interval type's resolution), e.g. "1500000 microseconds" for 1.5s.
+// Sub-microsecond parts are kept as a fraction, which Postgres rounds.
+func formatInterval(d time.Duration) string {
+	neg := d < 0
+	u := uint64(d)
+	if neg {
+		u = uint64(-(d + 1)) + 1 // safe for math.MinInt64
+	}
+	s := strconv.FormatUint(u/1000, 10)
+	if frac := u % 1000; frac != 0 {
+		s += "." + strings.TrimRight(fmt.Sprintf("%03d", frac), "0")
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s + " microseconds"
 }
 
 func formatFloat(f float64, bits int) string {
