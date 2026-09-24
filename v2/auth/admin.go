@@ -57,10 +57,15 @@ func adminValidateUUID(name, v string) error {
 // adminRequest sends an admin request authorized with the API key and
 // returns the response headers.
 func (c *Client) adminRequest(ctx context.Context, req *transport.Request, out any) (http.Header, error) {
-	// An explicit per-request token overrides any session token the client
-	// may attach; a custom Authorization header in Config.Headers still
-	// wins, matching auth-js where admin headers include caller overrides.
-	req.Token = c.cfg.APIKey
+	// Admin calls are authorized with the API key (service role / secret
+	// key), never with a stored user session. A custom Authorization header
+	// in Config.Headers wins, matching auth-js where admin headers are
+	// {Authorization: Bearer <key>, ...custom headers}. The transport gives
+	// a per-request Token precedence over headers, so only set it when the
+	// caller has not configured their own Authorization header.
+	if c.cfg.Headers.Get("Authorization") == "" && req.Header.Get("Authorization") == "" {
+		req.Token = c.cfg.APIKey
+	}
 	h, err := c.t.DoJSON(ctx, req, out)
 	return h, toError(err)
 }
