@@ -32,6 +32,9 @@ type Error struct {
 
 // Error implements the error interface.
 func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
 	var b strings.Builder
 	b.WriteString("postgrest: ")
 	b.WriteString(e.Message)

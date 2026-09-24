@@ -21,15 +21,23 @@ import (
 // error is recorded and returned by Execute. The zero FilterBuilder is not
 // usable: its Execute returns an error.
 //
-// Filter values of type any are rendered as text: nil and nil pointers
-// are null; an encoding.TextMarshaler or driver.Valuer (such as
-// sql.NullString) uses its text or database value; numbers, booleans and
-// strings use their literal form, even when the type has a String method
-// (so a stringer-style int enum is sent as its number); time.Time is RFC
-// 3339; time.Duration is a Postgres interval literal in microseconds
-// (time.Second is "1000000 microseconds"), not a nanosecond count; other
-// fmt.Stringer values use String, including pointer-receiver methods such
-// as *url.URL; slices are comma-joined; maps and structs are JSON.
+// Filter values of type any are rendered as text: nil, nil pointers, nil
+// slices and nil maps are null; an encoding.TextMarshaler or driver.Valuer
+// (such as sql.NullString) uses its text or database value; numbers,
+// booleans and strings use their literal form, even when the type has a
+// String method (so a stringer-style int enum is sent as its number);
+// floats use JavaScript's notation (1.5, 1e+300); time.Time, and types
+// defined from it, are RFC 3339; time.Duration is a Postgres interval
+// literal in microseconds (time.Second is "1000000 microseconds"), not a
+// nanosecond count; other fmt.Stringer values use String; slices are
+// comma-joined; maps and structs are JSON. Marshaler and String methods
+// with pointer receivers are used for values too (url.URL, big.Int).
+//
+// Times before year 1 are not supported: RFC 3339 has no BC form, and
+// Postgres expects a " BC" suffix instead of a negative year. Pass such
+// values as preformatted strings. A type defined from time.Duration (type
+// D time.Duration) cannot be told apart from any other int64 type by
+// reflection and is sent as a plain integer; convert it to time.Duration.
 type FilterBuilder struct {
 	c      *Client
 	method string

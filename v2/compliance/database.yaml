@@ -72,7 +72,7 @@ features:
   database.using_filters.eq:
     status: implemented
     symbols: [postgrest.FilterBuilder.Eq]
-    tests: [TestFilters, TestFilterValueKindsOnWire, TestFormatValue, TestFormatValueErrors]
+    tests: [TestFilters, TestFilterValueKindsOnWire, TestFormatValue, TestFormatValueErrors, TestNilAndPointerReceiverValuesInLists, TestNilErrorString]
     reason: ""
   database.using_filters.gt:
     status: implemented
@@ -102,7 +102,7 @@ features:
   database.using_filters.in:
     status: implemented
     symbols: [postgrest.FilterBuilder.In]
-    tests: [TestFilters, TestFilterErrors, TestInQuotingByFormattedText]
+    tests: [TestFilters, TestFilterErrors, TestInQuotingByFormattedText, TestNilAndPointerReceiverValuesInLists]
     reason: ""
   database.using_filters.is:
     status: implemented

@@ -6,6 +6,7 @@ import (
 	"encoding"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -31,7 +32,8 @@ func formatValue(v any) (string, error) {
 //
 // The rules, in order:
 //
-//  1. nil, nil pointers and nil interfaces are null.
+//  1. nil, nil pointers, nil interfaces, nil slices (including a nil
+//     json.RawMessage) and nil maps are null.
 //  2. json.RawMessage and []byte are used verbatim; time.Time and
 //     *time.Time are RFC 3339; time.Duration is an interval literal in
 //     microseconds (see formatInterval).
@@ -44,8 +46,11 @@ func formatValue(v any) (string, error) {
 //     it, unless it points to a basic kind; other pointers are
 //     dereferenced.
 //  6. fmt.Stringer is used for the remaining (non-basic) kinds.
-//  7. Slices and arrays are comma-joined.
-//  8. Anything else (maps, structs) is JSON; JavaScript would print
+//  7. A non-pointer value whose TextMarshaler, Valuer or Stringer has a
+//     pointer receiver (url.URL, big.Int) uses it via an addressable
+//     copy; a type defined from time.Time is formatted as a time.
+//  8. Slices and arrays are comma-joined.
+//  9. Anything else (maps, structs) is JSON; JavaScript would print
 //     "[object Object]", which is never useful.
 func formatScalar(v any, depth int) (s string, null bool, err error) {
 	if depth > maxFormatDepth {
@@ -55,8 +60,13 @@ func formatScalar(v any, depth int) (s string, null bool, err error) {
 		return "null", true, nil
 	}
 	rv := reflect.ValueOf(v)
-	if (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && rv.IsNil() {
-		return "null", true, nil
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Slice, reflect.Map:
+		// Nil slices and maps (including a nil json.RawMessage) are NULL
+		// too, rather than "" or JSON "null" text.
+		if rv.IsNil() {
+			return "null", true, nil
+		}
 	}
 	switch x := v.(type) {
 	case json.RawMessage:
@@ -104,8 +114,20 @@ func formatScalar(v any, depth int) (s string, null bool, err error) {
 		}
 		return formatScalar(rv.Elem().Interface(), depth+1)
 	}
-	if x, ok := v.(fmt.Stringer); ok {
-		return x.String(), false, nil
+	// A non-pointer value whose TextMarshaler, Valuer or Stringer has a
+	// pointer receiver (url.URL, big.Int) would otherwise become JSON:
+	// format an addressable copy instead.
+	p := reflect.New(rv.Type())
+	p.Elem().Set(rv)
+	switch p.Interface().(type) {
+	case encoding.TextMarshaler, driver.Valuer, fmt.Stringer:
+		return formatScalar(p.Interface(), depth+1)
+	}
+	// A type defined from time.Time (type myTime time.Time) has none of
+	// its methods; format it as a time.Time.
+	if rv.Kind() == reflect.Struct && rv.Type().ConvertibleTo(timeType) {
+		t, _ := rv.Convert(timeType).Interface().(time.Time)
+		return t.Format(time.RFC3339Nano), false, nil
 	}
 	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:
@@ -157,8 +179,35 @@ func formatInterval(d time.Duration) string {
 	return s + " microseconds"
 }
 
+var timeType = reflect.TypeOf(time.Time{})
+
+// formatFloat renders f like JavaScript's Number to string conversion:
+// the shortest representation that round-trips, in plain notation for
+// magnitudes in [1e-6, 1e21) and exponent notation (1e+300, 1.5e-7)
+// otherwise. Non-finite values use the spellings Postgres accepts
+// (NaN, Infinity, -Infinity).
 func formatFloat(f float64, bits int) string {
-	return strconv.FormatFloat(f, 'f', -1, bits)
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	}
+	if a := math.Abs(f); a == 0 || (a >= 1e-6 && a < 1e21) {
+		return strconv.FormatFloat(f, 'f', -1, bits)
+	}
+	s := strconv.FormatFloat(f, 'e', -1, bits)
+	// Go pads the exponent to two digits (1e-07); JavaScript does not.
+	if i := strings.IndexByte(s, 'e'); i >= 0 {
+		mant, exp := s[:i+2], strings.TrimLeft(s[i+2:], "0")
+		if exp == "" {
+			exp = "0"
+		}
+		s = mant + exp
+	}
+	return s
 }
 
 // listElements returns the elements of a slice or array value. ok is false

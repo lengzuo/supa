@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"math/big"
 	"net/url"
 	"strings"
 	"testing"
@@ -43,6 +44,17 @@ type ptrStringer struct{ s string }
 
 func (p *ptrStringer) String() string { return p.s }
 
+// ptrValuer has a pointer-receiver Value method.
+type ptrValuer struct{ n int64 }
+
+func (p *ptrValuer) Value() (driver.Value, error) { return p.n, nil }
+
+// myTime is defined from time.Time and has none of its methods.
+type myTime time.Time
+
+// myDur is defined from time.Duration; reflection sees a plain int64.
+type myDur time.Duration
+
 // textVal is an encoding.TextMarshaler.
 type textVal struct{}
 
@@ -74,6 +86,7 @@ func TestFormatValue(t *testing.T) {
 	u, _ := url.Parse("http://x/a?b=c")
 	far := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) // MarshalText fails for year > 9999
 	hour := time.Hour
+	namedTS := myTime(ts)
 	var nilStringer *label
 	tests := []struct {
 		name     string
@@ -96,7 +109,17 @@ func TestFormatValue(t *testing.T) {
 		{"uintptr", uintptr(9), "9", false},
 		{"float32", float32(0.1), "0.1", false},
 		{"float64", 1.5, "1.5", false},
-		{"float64_large", 1e21, "1000000000000000000000", false},
+		{"float64_below_1e21", 1e20, "100000000000000000000", false},
+		{"float64_1e21", 1e21, "1e+21", false},
+		{"float64_huge", 1e300, "1e+300", false},
+		{"float64_tiny", 1.5e-7, "1.5e-7", false},
+		{"float64_small_plain", 1e-6, "0.000001", false},
+		{"float64_negative_huge", -2.5e22, "-2.5e+22", false},
+		{"float64_zero", 0.0, "0", false},
+		{"float64_nan", math.NaN(), "NaN", false},
+		{"float64_inf", math.Inf(1), "Infinity", false},
+		{"float64_neg_inf", math.Inf(-1), "-Infinity", false},
+		{"float32_tiny", float32(1e-10), "1e-10", false},
 		{"json_number", json.Number("1.50"), "1.50", false},
 		{"raw_message", json.RawMessage(`{"a":1}`), `{"a":1}`, false},
 		{"bytes", []byte("abc"), "abc", false},
@@ -130,7 +153,19 @@ func TestFormatValue(t *testing.T) {
 		{"null_string_pointer", &sql.NullString{String: "p", Valid: true}, "p", false},
 		{"slice", []int{1, 2}, "1,2", false},
 		{"slice_with_nil", []any{nil, statusActive}, "null,1", false},
-		{"nil_slice", []int(nil), "", false},
+		{"nil_slice", []int(nil), "null", true},
+		{"empty_slice", []int{}, "", false},
+		{"nil_map", map[string]int(nil), "null", true},
+		{"nil_raw_message", json.RawMessage(nil), "null", true},
+		{"nil_bytes", []byte(nil), "null", true},
+		{"url_value", *u, "http://x/a?b=c", false},
+		{"big_int_value", *big.NewInt(12345), "12345", false},
+		{"big_float_value", *big.NewFloat(1.5), "1.5", false},
+		{"pointer_receiver_valuer_value", ptrValuer{n: 9}, "9", false},
+		{"pointer_receiver_stringer_value", ptrStringer{"v"}, "v", false},
+		{"named_time", myTime(ts), "2024-01-02T03:04:05.0000006Z", false},
+		{"named_time_pointer", &namedTS, "2024-01-02T03:04:05.0000006Z", false},
+		{"named_duration_is_int", myDur(time.Second), "1000000000", false},
 		{"array", [2]string{"a", "b"}, "a,b", false},
 		{"map", map[string]int{"a": 1}, `{"a":1}`, false},
 		{"struct", struct {
@@ -293,4 +328,29 @@ func TestRawJSONBodies(t *testing.T) {
 		}
 	}
 	assertEq(t, "requests for invalid bodies", len(f.requests()), sent)
+}
+
+func TestNilAndPointerReceiverValuesInLists(t *testing.T) {
+	c, f, _ := newFake(t, jsonReply(200, `[]`))
+	u, _ := url.Parse("http://x/a,b")
+	vals := []any{map[string]int(nil), []int(nil), json.RawMessage(nil), *u, *big.NewInt(7), ptrValuer{n: 3}, 1e300}
+	_, err := c.From("t").Select("*").
+		In("x", vals).
+		Contains("tags", vals).
+		Eq("m", map[string]int(nil)).
+		Eq("r", json.RawMessage(nil)).
+		Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := f.last(t).Query
+	assertEq(t, "in", q.Get("x"), `in.(null,"http://x/a,b",7,3,1e+300)`)
+	assertEq(t, "cs", q.Get("tags"), `cs.{null,null,null,"http://x/a,b",7,3,1e+300}`)
+	assertEq(t, "eq nil map", q.Get("m"), "eq.null")
+	assertEq(t, "eq nil raw", q.Get("r"), "eq.null")
+}
+
+func TestNilErrorString(t *testing.T) {
+	var e *Error
+	assertEq(t, "nil Error()", e.Error(), "<nil>")
 }

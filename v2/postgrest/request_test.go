@@ -236,6 +236,8 @@ func TestRPCEmptyRawArgs(t *testing.T) {
 		"raw_empty":   json.RawMessage{},
 		"bytes_nil":   []byte(nil),
 		"bytes_empty": []byte{},
+		"raw_spaces":  json.RawMessage(" \n\t "),
+		"bytes_space": []byte(" "),
 	} {
 		if _, err := c.RPC("fn", args).Execute(ctx); err != nil {
 			t.Fatalf("%s: %v", name, err)
