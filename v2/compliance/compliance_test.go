@@ -225,8 +225,8 @@ func inlineList(s string) []string {
 	return out
 }
 
-// scanModule returns the exported symbols of every non-internal package
-// under root, keyed "pkg.Name" and "pkg.Type.Method", plus the names of all
+// scanModule returns the exported symbols of every package under root,
+// keyed "pkg.Name", "pkg.Type.Method" and "pkg.Type.Field", plus the names of all
 // Test/Example functions.
 func scanModule(t *testing.T, root string) (symbols, tests map[string]bool) {
 	t.Helper()
@@ -281,6 +281,7 @@ func scanModule(t *testing.T, root string) (symbols, tests map[string]bool) {
 						if ast.IsExported(s.Name.Name) {
 							symbols[pkg+"."+s.Name.Name] = true
 							addInterfaceMethods(symbols, pkg, s)
+							addStructFields(symbols, pkg, s)
 						}
 					case *ast.ValueSpec:
 						for _, n := range s.Names {
@@ -308,6 +309,28 @@ func addInterfaceMethods(symbols map[string]bool, pkg string, s *ast.TypeSpec) {
 	for _, m := range it.Methods.List {
 		for _, n := range m.Names {
 			symbols[pkg+"."+s.Name.Name+"."+n.Name] = true
+		}
+	}
+}
+
+// addStructFields records exported fields (including promoted embedded
+// struct names) as pkg.Type.Field.
+func addStructFields(symbols map[string]bool, pkg string, s *ast.TypeSpec) {
+	st, ok := s.Type.(*ast.StructType)
+	if !ok {
+		return
+	}
+	for _, f := range st.Fields.List {
+		if len(f.Names) == 0 {
+			if name := recvName(f.Type); ast.IsExported(name) {
+				symbols[pkg+"."+s.Name.Name+"."+name] = true
+			}
+			continue
+		}
+		for _, n := range f.Names {
+			if ast.IsExported(n.Name) {
+				symbols[pkg+"."+s.Name.Name+"."+n.Name] = true
+			}
 		}
 	}
 }
