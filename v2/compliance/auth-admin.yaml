@@ -1,0 +1,141 @@
+features:
+  auth.admin.create_provider:
+    status: implemented
+    symbols: [auth.AdminAPI.CustomProviders, auth.AdminCustomProviderAPI.CreateProvider]
+    tests: [TestAdminCreateProvider]
+    reason: ""
+  auth.admin.create_user:
+    status: implemented
+    symbols: [auth.Client.Admin, auth.AdminAPI.CreateUser]
+    tests: [TestAdminCreateUser]
+    reason: ""
+  auth.admin.delete_mfa_factor:
+    status: implemented
+    symbols: [auth.AdminAPI.MFA, auth.AdminMFAAPI.DeleteFactor]
+    tests: [TestAdminMFADeleteFactor]
+    reason: ""
+  auth.admin.delete_provider:
+    status: implemented
+    symbols: [auth.AdminCustomProviderAPI.DeleteProvider]
+    tests: [TestAdminDeleteProvider]
+    reason: ""
+  auth.admin.delete_user:
+    status: implemented
+    symbols: [auth.AdminAPI.DeleteUser]
+    tests: [TestAdminDeleteUser]
+    reason: ""
+  auth.admin.generate_link:
+    status: implemented
+    symbols: [auth.AdminAPI.GenerateLink]
+    tests: [TestAdminGenerateLink]
+    reason: ""
+  auth.admin.get_provider:
+    status: implemented
+    symbols: [auth.AdminCustomProviderAPI.GetProvider]
+    tests: [TestAdminGetProvider]
+    reason: ""
+  auth.admin.get_user:
+    status: implemented
+    symbols: [auth.AdminAPI.GetUserByID]
+    tests: [TestAdminGetUserByID, TestAdminContextCanceled, TestAdminCustomAuthorizationHeader]
+    reason: ""
+  auth.admin.invite_user:
+    status: implemented
+    symbols: [auth.AdminAPI.InviteUserByEmail]
+    tests: [TestAdminInviteUserByEmail]
+    reason: ""
+  auth.admin.list_mfa_factors:
+    status: implemented
+    symbols: [auth.AdminMFAAPI.ListFactors]
+    tests: [TestAdminMFAListFactors]
+    reason: ""
+  auth.admin.list_providers:
+    status: implemented
+    symbols: [auth.AdminCustomProviderAPI.ListProviders]
+    tests: [TestAdminListProviders]
+    reason: ""
+  auth.admin.list_users:
+    status: implemented
+    symbols: [auth.AdminAPI.ListUsers]
+    tests: [TestAdminListUsers, TestAdminParsePagination]
+    reason: ""
+  auth.admin.sign_out:
+    status: implemented
+    symbols: [auth.AdminAPI.SignOut]
+    tests: [TestAdminSignOut, TestAdminConcurrentUse]
+    reason: ""
+  auth.admin.update_provider:
+    status: implemented
+    symbols: [auth.AdminCustomProviderAPI.UpdateProvider]
+    tests: [TestAdminUpdateProvider]
+    reason: ""
+  auth.admin.update_user:
+    status: implemented
+    symbols: [auth.AdminAPI.UpdateUserByID]
+    tests: [TestAdminUpdateUserByID]
+    reason: ""
+  auth.oauth_admin.create_client:
+    status: implemented
+    symbols: [auth.AdminAPI.OAuth, auth.AdminOAuthAPI.CreateClient]
+    tests: [TestAdminOAuthCreateClient]
+    reason: ""
+  auth.oauth_admin.delete_client:
+    status: implemented
+    symbols: [auth.AdminOAuthAPI.DeleteClient]
+    tests: [TestAdminOAuthDeleteClient]
+    reason: ""
+  auth.oauth_admin.get_client:
+    status: implemented
+    symbols: [auth.AdminOAuthAPI.GetClient]
+    tests: [TestAdminOAuthGetClient]
+    reason: ""
+  auth.oauth_admin.list_clients:
+    status: implemented
+    symbols: [auth.AdminOAuthAPI.ListClients]
+    tests: [TestAdminOAuthListClients]
+    reason: ""
+  auth.oauth_admin.regenerate_client_secret:
+    status: implemented
+    symbols: [auth.AdminOAuthAPI.RegenerateClientSecret]
+    tests: [TestAdminOAuthRegenerateClientSecret]
+    reason: ""
+  auth.oauth_admin.update_client:
+    status: implemented
+    symbols: [auth.AdminOAuthAPI.UpdateClient]
+    tests: [TestAdminOAuthUpdateClient]
+    reason: ""
+  auth.oauth_server.approve_authorization:
+    status: implemented
+    symbols: [auth.Client.OAuth, auth.OAuthServerAPI.WithToken, auth.OAuthServerAPI.ApproveAuthorization]
+    tests: [TestOAuthApproveAuthorization, TestOAuthSessionMissing]
+    reason: ""
+  auth.oauth_server.deny_authorization:
+    status: implemented
+    symbols: [auth.OAuthServerAPI.DenyAuthorization]
+    tests: [TestOAuthDenyAuthorization, TestOAuthSessionMissing]
+    reason: ""
+  auth.oauth_server.get_authorization_details:
+    status: implemented
+    symbols: [auth.OAuthServerAPI.GetAuthorizationDetails, auth.OAuthAuthorizationDetails.NeedsConsent]
+    tests: [TestOAuthGetAuthorizationDetails, TestOAuthSessionMissing]
+    reason: ""
+  auth.oauth_server.list_grants:
+    status: implemented
+    symbols: [auth.OAuthServerAPI.ListGrants]
+    tests: [TestOAuthListGrants, TestOAuthSessionMissing, TestOAuthContextCanceled]
+    reason: ""
+  auth.oauth_server.revoke_grant:
+    status: implemented
+    symbols: [auth.OAuthServerAPI.RevokeGrant]
+    tests: [TestOAuthRevokeGrant, TestOAuthSessionMissing]
+    reason: ""
+  auth.passkey_admin.delete_passkey:
+    status: implemented
+    symbols: [auth.AdminAPI.Passkeys, auth.AdminPasskeyAPI.DeletePasskey]
+    tests: [TestAdminDeletePasskey]
+    reason: ""
+  auth.passkey_admin.list_passkeys:
+    status: implemented
+    symbols: [auth.AdminPasskeyAPI.ListPasskeys]
+    tests: [TestAdminListPasskeys]
+    reason: ""
