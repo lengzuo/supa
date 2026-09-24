@@ -98,7 +98,7 @@ func readUpstream(t *testing.T) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	out := map[string]string{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
