@@ -1,0 +1,166 @@
+features:
+  realtime.channel.broadcast_http:
+    status: implemented
+    symbols: [realtime.Channel.HTTPSend, realtime.HTTPError]
+    tests: [TestHTTPSend]
+    reason: ""
+  realtime.channel.broadcast:
+    status: implemented
+    symbols: [realtime.Channel.Send, realtime.SendParams]
+    tests: [TestBroadcastSendNoAck, TestBroadcastAck, TestSendFallsBackToHTTP, TestCallbackMayCallClient]
+    reason: ""
+  realtime.channel.subscribe:
+    status: implemented
+    symbols: [realtime.Channel.Subscribe, realtime.Channel.OnStatus, realtime.SubscribeError]
+    tests: [TestSubscribeJoinPayload, TestSubscribeJoinErrorAndRejoin, TestSubscribeTimeout, TestSubscribeContextCanceled, TestServerChannelCloseAndError]
+    reason: ""
+  realtime.channel.unsubscribe:
+    status: implemented
+    symbols: [realtime.Channel.Unsubscribe]
+    tests: [TestUnsubscribeAndDeferredDisconnect]
+    reason: ""
+  realtime.client.channel:
+    status: implemented
+    symbols: [realtime.Client.Channel, realtime.ChannelOptions]
+    tests: [TestChannelReuseAndGetChannels]
+    reason: ""
+  realtime.client.connect:
+    status: implemented
+    symbols: [realtime.New, realtime.Client.Connect]
+    tests: [TestConnectConnectionStateDisconnect, TestConnectFailureThenReconnect, TestEndpointURL]
+    reason: ""
+  realtime.client.connection_state:
+    status: implemented
+    symbols: [realtime.Client.ConnectionState, realtime.Client.IsConnected]
+    tests: [TestConnectConnectionStateDisconnect]
+    reason: ""
+  realtime.client.disconnect:
+    status: implemented
+    symbols: [realtime.Client.Disconnect, realtime.Client.DisconnectWithCode]
+    tests: [TestConnectConnectionStateDisconnect, TestDisconnectNoGoroutineLeak]
+    reason: ""
+  realtime.client.get_channels:
+    status: implemented
+    symbols: [realtime.Client.GetChannels]
+    tests: [TestChannelReuseAndGetChannels, TestRemoveChannelAndRemoveAll]
+    reason: ""
+  realtime.client.listen_heartbeats:
+    status: implemented
+    symbols: [realtime.Client.OnHeartbeat, realtime.Config.HeartbeatCallback, realtime.Client.SendHeartbeat]
+    tests: [TestHeartbeat, TestHeartbeatTimeoutReconnects]
+    reason: ""
+  realtime.client.remove_all_channels:
+    status: implemented
+    symbols: [realtime.Client.RemoveAllChannels]
+    tests: [TestRemoveChannelAndRemoveAll]
+    reason: ""
+  realtime.client.remove_channel:
+    status: implemented
+    symbols: [realtime.Client.RemoveChannel]
+    tests: [TestRemoveChannelAndRemoveAll, TestDeferredDisconnectCancelledByNewChannel]
+    reason: ""
+  realtime.client.set_auth_token:
+    status: implemented
+    symbols: [realtime.Client.SetAuth]
+    tests: [TestSetAuthPropagation, TestSetAuthStaleResultIgnored, TestSetAuthCallbackReturnsEmptyClearsToken]
+    reason: ""
+  realtime.configuration.access_token_callback:
+    status: implemented
+    symbols: [realtime.Config.AccessToken, realtime.Client.SetAuth]
+    tests: [TestAccessTokenCallback, TestSetAuthCallbackReturnsEmptyClearsToken, TestSendFallsBackToHTTP]
+    reason: ""
+  realtime.configuration.binary_protocol:
+    status: implemented
+    symbols: [realtime.Config.VSN, realtime.VSN1, realtime.VSN2, realtime.DefaultVSN, realtime.BroadcastMessage.Binary]
+    tests: [TestSerializerBinaryUserBroadcastPush, TestSerializerBinaryDecode, TestSerializerJSON, TestBroadcastReceiveBinaryFrames, TestBroadcastSendNoAck]
+    reason: ""
+  realtime.configuration.custom_logger:
+    status: implemented
+    symbols: [realtime.Config.Logger]
+    tests: [TestCustomLogger]
+    reason: ""
+  realtime.configuration.custom_websocket_transport:
+    status: implemented
+    symbols: [realtime.Config.Transport, realtime.WebSocketTransport, realtime.WebSocketConn, realtime.WebSocketTransportFunc, realtime.DefaultTransport]
+    tests: [TestCustomTransport]
+    reason: ""
+  realtime.configuration.deferred_disconnect:
+    status: implemented
+    symbols: [realtime.Config.DisconnectOnEmptyChannelsAfter]
+    tests: [TestUnsubscribeAndDeferredDisconnect, TestDeferredDisconnectCancelledByNewChannel]
+    reason: ""
+  realtime.configuration.heartbeat_interval:
+    status: implemented
+    symbols: [realtime.Config.HeartbeatInterval, realtime.DefaultHeartbeatInterval]
+    tests: [TestHeartbeat, TestHeartbeatTimeoutReconnects]
+    reason: ""
+  realtime.configuration.reconnect_backoff:
+    status: implemented
+    symbols: [realtime.Config.ReconnectBackoff, realtime.DefaultReconnectBackoff, realtime.Config.RejoinBackoff, realtime.DefaultRejoinBackoff]
+    tests: [TestConnectFailureThenReconnect, TestServerCloseReconnectsAndRejoins, TestSubscribeJoinErrorAndRejoin]
+    reason: ""
+  realtime.presence.presence_key:
+    status: implemented
+    symbols: [realtime.PresenceOptions.Key, realtime.ChannelOptions.Presence, realtime.Channel.Track]
+    tests: [TestPresenceEvents, TestSubscribeJoinPayload]
+    reason: ""
+  realtime.presence.presence_state:
+    status: implemented
+    symbols: [realtime.Channel.PresenceState, realtime.PresenceState, realtime.Presence]
+    tests: [TestPresenceEvents, TestPresenceSyncState, TestPresenceSyncDiff, TestPresenceJSON]
+    reason: ""
+  realtime.presence.track:
+    status: implemented
+    symbols: [realtime.Channel.Track]
+    tests: [TestPresenceTrackUntrack, TestMessagesBufferedWhileConnecting]
+    reason: ""
+  realtime.presence.untrack:
+    status: implemented
+    symbols: [realtime.Channel.Untrack]
+    tests: [TestPresenceTrackUntrack]
+    reason: ""
+  realtime.subscriptions.broadcast:
+    status: implemented
+    symbols: [realtime.Channel.OnBroadcast, realtime.BroadcastMessage]
+    tests: [TestBroadcastReceive, TestBroadcastReceiveBinaryFrames, TestOutdatedJoinRefDropped]
+    reason: ""
+  realtime.subscriptions.broadcast_ack:
+    status: implemented
+    symbols: [realtime.BroadcastOptions.Ack, realtime.Channel.Send, realtime.PushError]
+    tests: [TestBroadcastAck]
+    reason: ""
+  realtime.subscriptions.broadcast_replay:
+    status: implemented
+    symbols: [realtime.BroadcastOptions.Replay, realtime.ReplayOptions, realtime.BroadcastMeta]
+    tests: [TestBroadcastReplayConfig, TestChannelReuseAndGetChannels, TestBroadcastReceiveBinaryFrames]
+    reason: ""
+  realtime.subscriptions.broadcast_self:
+    status: implemented
+    symbols: [realtime.BroadcastOptions.Self]
+    tests: [TestBroadcastSelf, TestSubscribeJoinPayload]
+    reason: ""
+  realtime.subscriptions.postgres_changes:
+    status: implemented
+    symbols: [realtime.Channel.OnPostgresChanges, realtime.PostgresChangesFilter, realtime.PostgresChangesPayload, realtime.PostgresChangesPayload.DecodeNew, realtime.PostgresChangesPayload.DecodeOld, realtime.PostgresChangesOptions, realtime.NewPostgresFilter, realtime.PostgresFilter.Eq, realtime.PostgresFilter.Neq, realtime.PostgresFilter.Gt, realtime.PostgresFilter.Gte, realtime.PostgresFilter.Lt, realtime.PostgresFilter.Lte, realtime.PostgresFilter.In, realtime.PostgresFilter.Like, realtime.PostgresFilter.ILike, realtime.PostgresFilter.Match, realtime.PostgresFilter.IMatch, realtime.PostgresFilter.Is, realtime.PostgresFilter.IsDistinct, realtime.PostgresFilter.Not, realtime.PostgresFilter.Build, realtime.PostgresFilter.String]
+    tests: [TestPostgresChanges, TestPostgresChangesWaitOption, TestPostgresFilterBuilder, TestConvertChangeData]
+    reason: ""
+  realtime.subscriptions.postgres_changes_filter:
+    status: implemented
+    symbols: [realtime.PostgresChangesFilter, realtime.PostgresFilter, realtime.Channel.OnPostgresChanges]
+    tests: [TestPostgresFilterBuilder, TestPostgresChanges, TestPostgresChangesMultipleFilters]
+    reason: ""
+  realtime.subscriptions.private_channel:
+    status: implemented
+    symbols: [realtime.ChannelOptions.Private, realtime.Channel.Subscribe]
+    tests: [TestBroadcastReplayConfig, TestHTTPSend, TestSendFallsBackToHTTP, TestAccessTokenCallback]
+    reason: ""
+  realtime.subscriptions.subscribe_presence:
+    status: implemented
+    symbols: [realtime.Channel.OnPresenceSync, realtime.Channel.OnPresenceJoin, realtime.Channel.OnPresenceLeave, realtime.PresenceJoinEvent, realtime.PresenceLeaveEvent]
+    tests: [TestPresenceEvents, TestSubscribeJoinPayload]
+    reason: ""
+  realtime.subscriptions.postgres_changes_multiple_filters:
+    status: implemented
+    symbols: [realtime.Channel.OnPostgresChanges, realtime.PostgresFilter, realtime.NewPostgresFilter]
+    tests: [TestPostgresChangesMultipleFilters, TestPostgresChangesBindingMismatch]
+    reason: ""
