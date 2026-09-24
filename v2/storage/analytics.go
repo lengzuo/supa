@@ -90,7 +90,7 @@ func (a *AnalyticsAPI) CreateBucket(ctx context.Context, name string) (*Analytic
 	if a.err != nil {
 		return nil, a.err
 	}
-	if err := icebergCheckSegment("bucket name", name); err != nil {
+	if err := analyticsCheckBucketName(name); err != nil {
 		return nil, err
 	}
 	var out AnalyticsBucket
@@ -145,7 +145,7 @@ func (a *AnalyticsAPI) DeleteBucket(ctx context.Context, name string) (*Analytic
 	if a.err != nil {
 		return nil, a.err
 	}
-	if err := icebergCheckSegment("bucket name", name); err != nil {
+	if err := analyticsCheckBucketName(name); err != nil {
 		return nil, err
 	}
 	var out AnalyticsMessageResponse
@@ -171,12 +171,21 @@ func (a *AnalyticsAPI) From(bucketName string) (*IcebergCatalog, error) {
 	if a.err != nil {
 		return nil, a.err
 	}
-	if !analyticsValidBucketName(bucketName) {
-		return nil, &AnalyticsArgumentError{Argument: "bucket name", Reason: "file, folder, and bucket names must follow " +
-			"AWS object key naming guidelines and should avoid the use of any other characters, " +
-			`and must not be "." or ".."`}
+	if err := analyticsCheckBucketName(bucketName); err != nil {
+		return nil, err
 	}
 	return &IcebergCatalog{t: a.t, warehouse: bucketName}, nil
+}
+
+// analyticsCheckBucketName returns an *AnalyticsArgumentError when name
+// is not a valid bucket name.
+func analyticsCheckBucketName(name string) error {
+	if analyticsValidBucketName(name) {
+		return nil
+	}
+	return &AnalyticsArgumentError{Argument: "bucket name", Reason: "file, folder, and bucket names must follow " +
+		"AWS object key naming guidelines and should avoid the use of any other characters, " +
+		`and must not be "." or ".."`}
 }
 
 var analyticsBucketNameRE = regexp.MustCompile(`^[\w!.*'() &$@=;:+,?-]+$`)

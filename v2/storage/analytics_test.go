@@ -231,3 +231,29 @@ func TestAnalyticsContextCanceled(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+// upstream: storage-js src/packages/StorageAnalyticsClient.ts deleteBucket / from (error paths)
+func TestAnalyticsErrorPaths(t *testing.T) {
+	c, reqs := analyticsTestServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		analyticsWriteJSON(w, 404, `{"statusCode":"404","error":"not_found","message":"Bucket not found","code":"NoSuchBucket"}`)
+	})
+	_, err := c.Analytics().DeleteBucket(context.Background(), "missing")
+	var se *Error
+	if !errors.As(err, &se) || se.Status != 404 || se.Code != "NoSuchBucket" || se.Message != "Bucket not found" || se.Namespace != "storage" {
+		t.Fatalf("DeleteBucket err = %+v", err)
+	}
+	if _, err := c.Analytics().ListBuckets(context.Background(), nil); !errors.As(err, &se) || se.Status != 404 {
+		t.Fatalf("ListBuckets err = %+v", err)
+	}
+	n := len(reqs())
+	for _, name := range []string{"", ".", "..", "a/b", "a#b"} {
+		_, err := c.Analytics().From(name)
+		var ae *AnalyticsArgumentError
+		if !errors.As(err, &ae) || ae.Argument != "bucket name" || !strings.Contains(err.Error(), "invalid bucket name") {
+			t.Errorf("From(%q) err = %v", name, err)
+		}
+	}
+	if len(reqs()) != n {
+		t.Fatal("From sent a request")
+	}
+}

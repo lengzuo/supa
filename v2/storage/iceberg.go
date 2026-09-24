@@ -30,17 +30,27 @@ import (
 // /v1/config. Concretely:
 //
 //   - On first use the catalog calls GET /v1/config?warehouse=<bucket> and
-//     uses the server-provided "prefix" (overrides, then defaults)
-//     verbatim for every later path. Concurrent first callers share one
-//     config request, and each caller still honors its own context.
-//   - It falls back to the bucket name when the server provides no prefix
-//     or answers /v1/config with an HTTP error other than 401, 403 or 419;
-//     that fallback is cached. Auth errors, network errors and context
-//     errors are returned and are not cached, so the next call retries.
+//     uses the server-provided prefix (overrides.prefix when the key is
+//     present, else defaults.prefix, like iceberg-js's
+//     `overrides?.prefix ?? defaults?.prefix`) verbatim for every later
+//     path. Concurrent first callers share one config request, and each
+//     caller still honors its own context.
+//   - The prefix must consist of RFC 3986 path characters only (unreserved,
+//     sub-delims, ':', '@' and valid %XX escapes); no segment may be empty,
+//     and no '/'- or '\'-separated component of a decoded segment may be
+//     "." or ".." (encoded separators such as "a%2Fb" are allowed and stay
+//     encoded on the wire). Otherwise the call fails and nothing is cached.
+//   - It falls back to the bucket name, and caches that fallback, when the
+//     prefix is empty or absent or /v1/config answers 400, 404, 405 or 501
+//     (the server has no usable config endpoint). Any other failure (auth
+//     errors, 429, 5xx, network and context errors, a panic in a request
+//     editor) is returned and not cached, so the next call retries.
 //     (iceberg-js caches the fallback after any failure.)
 //   - Namespace levels, table names and the bucket name must not be
-//     empty, "." or ".."; such arguments fail with *AnalyticsArgumentError
-//     before any request is sent, so no dot-segment can reach the path.
+//     empty, "." or "..", nor contain '/' or '\'; namespace levels also
+//     must not contain the 0x1F level separator. Bucket names follow the
+//     Storage bucket naming rules. Invalid arguments fail with
+//     *AnalyticsArgumentError before any request is sent.
 type IcebergCatalog struct {
 	t         *transport.Client
 	warehouse string
@@ -70,14 +80,16 @@ func (e *AnalyticsArgumentError) Error() string {
 	return "storage: invalid " + e.Argument + ": " + e.Reason
 }
 
-// icebergCheckSegment rejects values that are empty or would form a
-// dot-segment ("." or "..") in a URL path.
+// icebergCheckSegment rejects values that are empty, would form a
+// dot-segment ("." or "..") in a URL path, or contain a path separator.
 func icebergCheckSegment(argument, s string) error {
-	switch s {
-	case "":
+	switch {
+	case s == "":
 		return &AnalyticsArgumentError{Argument: argument, Reason: "must not be empty"}
-	case ".", "..":
+	case s == "." || s == "..":
 		return &AnalyticsArgumentError{Argument: argument, Reason: `must not be "." or ".."`}
+	case strings.ContainsAny(s, `/\`):
+		return &AnalyticsArgumentError{Argument: argument, Reason: `must not contain "/" or "\"`}
 	}
 	return nil
 }
@@ -205,6 +217,10 @@ func icebergCheckNamespace(ns []string) error {
 		if err := icebergCheckSegment("namespace level", p); err != nil {
 			return err
 		}
+		if strings.IndexByte(p, 0x1f) >= 0 {
+			return &AnalyticsArgumentError{Argument: "namespace level",
+				Reason: "must not contain the 0x1F namespace separator"}
+		}
 	}
 	return nil
 }
@@ -252,16 +268,7 @@ func (c *IcebergCatalog) resolvePrefix(ctx context.Context) (string, error) {
 			call = &icebergConfigCall{done: make(chan struct{})}
 			c.inflight = call
 			c.mu.Unlock()
-			p, cache, err := c.fetchPrefix(ctx)
-			c.mu.Lock()
-			if cache {
-				c.prefix = p
-			}
-			c.inflight = nil
-			call.prefix, call.err = p, err
-			close(call.done)
-			c.mu.Unlock()
-			return p, err
+			return c.leadPrefix(ctx, call)
 		}
 		c.mu.Unlock()
 		select {
@@ -283,6 +290,29 @@ func (c *IcebergCatalog) resolvePrefix(ctx context.Context) (string, error) {
 	}
 }
 
+// leadPrefix performs the config fetch for call. Whatever happens,
+// including a panic in a request editor or HTTP client, the in-flight slot
+// is released and waiters are woken, so the catalog can never wedge.
+func (c *IcebergCatalog) leadPrefix(ctx context.Context, call *icebergConfigCall) (prefix string, err error) {
+	cache := false
+	defer func() {
+		if r := recover(); r != nil {
+			prefix, cache = "", false
+			err = fmt.Errorf("storage: iceberg config request panicked: %v", r)
+		}
+		c.mu.Lock()
+		if cache {
+			c.prefix = prefix
+		}
+		c.inflight = nil
+		call.prefix, call.err = prefix, err
+		close(call.done)
+		c.mu.Unlock()
+	}()
+	prefix, cache, err = c.fetchPrefix(ctx)
+	return prefix, err
+}
+
 // fetchPrefix loads /v1/config and reports whether the result may be
 // cached.
 func (c *IcebergCatalog) fetchPrefix(ctx context.Context) (prefix string, cache bool, err error) {
@@ -290,20 +320,19 @@ func (c *IcebergCatalog) fetchPrefix(ctx context.Context) (prefix string, cache 
 	cfg, err := c.LoadConfig(ctx)
 	if err != nil {
 		var ie *IcebergError
-		if !errors.As(err, &ie) {
-			return "", false, err
+		if errors.As(err, &ie) {
+			switch ie.Status {
+			case http.StatusBadRequest, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+				return fallback, true, nil
+			}
 		}
-		switch ie.Status {
-		case http.StatusUnauthorized, http.StatusForbidden, 419:
-			return "", false, err
-		}
-		return fallback, true, nil
+		return "", false, err
 	}
-	p := cfg.Overrides["prefix"]
-	if p == "" {
+	p, ok := cfg.Overrides["prefix"]
+	if !ok {
 		p = cfg.Defaults["prefix"]
 	}
-	if p == "" {
+	if strings.Trim(p, "/") == "" {
 		return fallback, true, nil
 	}
 	p, err = icebergServerPrefix(p)
@@ -315,26 +344,67 @@ func (c *IcebergCatalog) fetchPrefix(ctx context.Context) (prefix string, cache 
 
 // icebergServerPrefix validates a server-provided prefix. The prefix is
 // already URL-encoded per the REST spec, so after trimming slashes it is
-// used verbatim; segments that are empty or decode to "." or ".." and
-// characters that would end the path are rejected.
+// used verbatim. Only RFC 3986 pchar bytes and '/' separators are allowed
+// (unreserved, sub-delims, ':', '@' and well-formed %XX escapes); anything
+// else, including non-ASCII, is rejected so that net/url can never
+// re-escape the path. Each segment must be non-empty, and no component of
+// the decoded segment, split at '/' or '\', may be "." or ".." or all
+// components empty. Encoded separators such as "a%2Fb" are kept; they stay
+// encoded on the wire.
 func icebergServerPrefix(p string) (string, error) {
 	p = strings.Trim(p, "/")
 	bad := fmt.Errorf("storage: iceberg server returned an unusable catalog prefix %q", p)
-	if p == "" || strings.ContainsAny(p, "?#\\") {
+	if p == "" {
 		return "", bad
 	}
 	for _, seg := range strings.Split(p, "/") {
-		dec, err := url.PathUnescape(seg)
-		if err != nil || seg == "" || dec == "." || dec == ".." {
+		if seg == "" {
 			return "", bad
 		}
-		for _, r := range seg {
-			if r <= ' ' || r == 0x7f {
+		for i := 0; i < len(seg); i++ {
+			b := seg[i]
+			switch {
+			case b == '%':
+				if i+2 >= len(seg) || !icebergIsHex(seg[i+1]) || !icebergIsHex(seg[i+2]) {
+					return "", bad
+				}
+				i += 2
+			case !icebergIsPchar(b):
+				return "", bad
+			}
+		}
+		dec, err := url.PathUnescape(seg)
+		if err != nil {
+			return "", bad
+		}
+		// An encoded separator (%2F, %5C) stays encoded on the wire, so
+		// "a%2Fb" is allowed, but no separator-delimited component of the
+		// decoded segment may be a dot-segment: a proxy that decodes
+		// %2F must not be able to see a traversal.
+		parts := strings.FieldsFunc(dec, func(r rune) bool { return r == '/' || r == '\\' })
+		if len(parts) == 0 {
+			return "", bad // only separators
+		}
+		for _, part := range parts {
+			if part == "." || part == ".." {
 				return "", bad
 			}
 		}
 	}
 	return p, nil
+}
+
+// icebergIsPchar reports whether b is an RFC 3986 pchar other than '%'.
+func icebergIsPchar(b byte) bool {
+	switch {
+	case 'a' <= b && b <= 'z', 'A' <= b && b <= 'Z', '0' <= b && b <= '9':
+		return true
+	}
+	return strings.IndexByte("-._~!$&'()*+,;=:@", b) >= 0
+}
+
+func icebergIsHex(b byte) bool {
+	return ('0' <= b && b <= '9') || ('a' <= b && b <= 'f') || ('A' <= b && b <= 'F')
 }
 
 // do sends a catalog request relative to the resolved prefix.
@@ -358,6 +428,9 @@ func (c *IcebergCatalog) ListNamespaces(ctx context.Context, opts *IcebergListNa
 	q := url.Values{}
 	if opts != nil {
 		if len(opts.Parent) > 0 {
+			if err := icebergCheckNamespace(opts.Parent); err != nil {
+				return nil, err
+			}
 			q.Set("parent", strings.Join(opts.Parent, "\x1f"))
 		}
 		if opts.PageToken != "" {

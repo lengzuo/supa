@@ -2,13 +2,22 @@
 # - The Iceberg catalog follows iceberg-js 1.0.0 / the Iceberg REST spec,
 #   while storage-js pins iceberg-js ^0.8.1 (which lacks renameTable,
 #   registerTable and updateNamespaceProperties and never calls /v1/config).
-# - /v1/config is fetched once per catalog (single-flight, each caller
-#   honors its own context). The bucket-name fallback prefix is cached only
-#   when the server returns no prefix or a non-auth HTTP error; 401/403/419,
-#   network and context errors are returned and retried on the next call.
-#   The server prefix is used verbatim; unsafe prefixes are rejected.
-# - Empty, "." and ".." bucket names, namespace levels and table names are
-#   rejected with *storage.AnalyticsArgumentError before any request.
+# - /v1/config is fetched once per catalog (single-flight; each caller
+#   honors its own context; a panic becomes an error and never wedges the
+#   catalog). Prefix = overrides.prefix if present, else defaults.prefix
+#   (iceberg-js `??` semantics); an empty prefix falls back to the bucket.
+# - The bucket-name fallback is cached only for an empty/absent prefix or a
+#   400/404/405/501 answer from /v1/config. Auth errors, 429, other 5xx,
+#   network and context errors are returned and retried on the next call
+#   (iceberg-js caches the fallback after any failure).
+# - The server prefix is used verbatim but must be RFC 3986 pchar only;
+#   decoded segments may not contain a "." or ".." component. Unsafe
+#   prefixes fail the call and are not cached.
+# - Bucket names follow the full Storage naming rules (also in CreateBucket
+#   and DeleteBucket). Namespace levels and table names must not be empty,
+#   "." or "..", or contain "/" or "\"; namespace levels also must not
+#   contain 0x1F. Violations return *storage.AnalyticsArgumentError before
+#   any request is sent.
 features:
   storage.analytics.create_analytics_bucket:
     status: implemented
@@ -18,7 +27,7 @@ features:
   storage.analytics.delete_analytics_bucket:
     status: implemented
     symbols: [storage.AnalyticsAPI.DeleteBucket]
-    tests: [TestAnalyticsDeleteBucket, TestAnalyticsRequestURI, TestIcebergRejectsDotSegments]
+    tests: [TestAnalyticsDeleteBucket, TestAnalyticsRequestURI, TestIcebergRejectsDotSegments, TestAnalyticsErrorPaths]
     reason: ""
   storage.analytics.list_analytics_buckets:
     status: implemented
@@ -28,7 +37,7 @@ features:
   storage.analytics.access_catalog:
     status: implemented
     symbols: [storage.AnalyticsAPI.From, storage.IcebergCatalog, storage.IcebergCatalog.LoadConfig]
-    tests: [TestAnalyticsFrom, TestIcebergAccessCatalog, TestIcebergPrefixFallback, TestIcebergErrorMapping, TestIcebergContextCanceled, TestIcebergServerPrefix, TestIcebergConfigAuthErrorNotCached, TestIcebergConfigHangHonorsContext, TestIcebergConfigLeaderCanceled, TestAnalyticsRequestURI]
+    tests: [TestAnalyticsFrom, TestIcebergAccessCatalog, TestIcebergPrefixFallback, TestIcebergErrorMapping, TestIcebergContextCanceled, TestIcebergServerPrefix, TestIcebergConfigAuthErrorNotCached, TestIcebergConfigHangHonorsContext, TestIcebergConfigLeaderCanceled, TestAnalyticsRequestURI, TestIcebergServerPrefixValidation, TestIcebergConfigPrefixPrecedence, TestIcebergConfigFallbackCaching, TestIcebergConfigPanicDoesNotWedge]
     reason: ""
   storage.analytics.create_namespace:
     status: implemented
@@ -103,17 +112,17 @@ features:
   storage.vector_buckets.create_vector_bucket:
     status: implemented
     symbols: [storage.Client.Vectors, storage.VectorsAPI.CreateBucket]
-    tests: [TestVectorsCreateBucket, TestVectorsContextCanceled]
+    tests: [TestVectorsCreateBucket, TestVectorsContextCanceled, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.delete_vector_bucket:
     status: implemented
     symbols: [storage.VectorsAPI.DeleteBucket]
-    tests: [TestVectorsDeleteBucket]
+    tests: [TestVectorsDeleteBucket, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.list_vector_buckets:
     status: implemented
     symbols: [storage.VectorsAPI.ListBuckets, storage.VectorListBucketsOptions, storage.VectorsAPI.GetBucket]
-    tests: [TestVectorsListBuckets, TestVectorsGetBucket, TestVectorsNonJSONSuccess, TestVectorsErrorMapping]
+    tests: [TestVectorsListBuckets, TestVectorsGetBucket, TestVectorsNonJSONSuccess, TestVectorsErrorMapping, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.access_vector_index:
     status: implemented
@@ -123,37 +132,37 @@ features:
   storage.vector_buckets.create_index:
     status: implemented
     symbols: [storage.VectorBucketScope.CreateIndex, storage.VectorCreateIndexOptions]
-    tests: [TestVectorsCreateIndex]
+    tests: [TestVectorsCreateIndex, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.get_index:
     status: implemented
     symbols: [storage.VectorBucketScope.GetIndex]
-    tests: [TestVectorsGetIndex, TestVectorsErrorEmptyStatusCode]
+    tests: [TestVectorsGetIndex, TestVectorsErrorEmptyStatusCode, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.list_indexes:
     status: implemented
     symbols: [storage.VectorBucketScope.ListIndexes, storage.VectorListIndexesOptions]
-    tests: [TestVectorsListIndexes]
+    tests: [TestVectorsListIndexes, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.delete_index:
     status: implemented
     symbols: [storage.VectorBucketScope.DeleteIndex]
-    tests: [TestVectorsDeleteIndex]
+    tests: [TestVectorsDeleteIndex, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.put_vectors:
     status: implemented
     symbols: [storage.VectorIndexScope.PutVectors, storage.VectorPutVectorsOptions]
-    tests: [TestVectorsPutVectors]
+    tests: [TestVectorsPutVectors, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.get_vectors:
     status: implemented
     symbols: [storage.VectorIndexScope.GetVectors, storage.VectorGetVectorsOptions]
-    tests: [TestVectorsGetVectors, TestVectorsConcurrentScopes]
+    tests: [TestVectorsGetVectors, TestVectorsConcurrentScopes, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.list_vectors:
     status: implemented
     symbols: [storage.VectorIndexScope.ListVectors, storage.VectorListVectorsOptions]
-    tests: [TestVectorsListVectors, TestVectorScopedMarshal]
+    tests: [TestVectorsListVectors, TestVectorScopedMarshal, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.parallel_scan:
     status: implemented
@@ -163,10 +172,10 @@ features:
   storage.vector_buckets.query_vectors:
     status: implemented
     symbols: [storage.VectorIndexScope.QueryVectors, storage.VectorQueryVectorsOptions]
-    tests: [TestVectorsQueryVectors]
+    tests: [TestVectorsQueryVectors, TestVectorsMethodErrors]
     reason: ""
   storage.vector_buckets.delete_vectors:
     status: implemented
     symbols: [storage.VectorIndexScope.DeleteVectors, storage.VectorDeleteVectorsOptions]
-    tests: [TestVectorsDeleteVectors]
+    tests: [TestVectorsDeleteVectors, TestVectorsMethodErrors]
     reason: ""

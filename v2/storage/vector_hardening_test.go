@@ -126,3 +126,45 @@ func TestVectorsErrorEmptyStatusCode(t *testing.T) {
 		}
 	}
 }
+
+// upstream: storage-js src/lib/common/fetch.ts handleError (vectors namespace, every endpoint)
+func TestVectorsMethodErrors(t *testing.T) {
+	c, reqs := analyticsTestServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		analyticsWriteJSON(w, 404, `{"statusCode":"404","error":"Not Found","message":"missing","code":"S3VectorNotFoundException"}`)
+	})
+	ctx := context.Background()
+	v := c.Vectors()
+	b := v.From("emb")
+	idx := b.Index("docs")
+	calls := map[string]func() error{
+		"CreateVectorBucket": func() error { return v.CreateBucket(ctx, "emb") },
+		"GetVectorBucket":    func() error { _, err := v.GetBucket(ctx, "emb"); return err },
+		"ListVectorBuckets":  func() error { _, err := v.ListBuckets(ctx, nil); return err },
+		"DeleteVectorBucket": func() error { return v.DeleteBucket(ctx, "emb") },
+		"CreateIndex": func() error {
+			return b.CreateIndex(ctx, VectorCreateIndexOptions{IndexName: "docs", DataType: VectorDataTypeFloat32, Dimension: 3, DistanceMetric: VectorDistanceCosine})
+		},
+		"GetIndex":     func() error { _, err := b.GetIndex(ctx, "docs"); return err },
+		"ListIndexes":  func() error { _, err := b.ListIndexes(ctx, nil); return err },
+		"DeleteIndex":  func() error { return b.DeleteIndex(ctx, "docs") },
+		"PutVectors":   func() error { return idx.PutVectors(ctx, VectorPutVectorsOptions{Vectors: []VectorObject{{Key: "k"}}}) },
+		"GetVectors":   func() error { _, err := idx.GetVectors(ctx, VectorGetVectorsOptions{Keys: []string{"k"}}); return err },
+		"ListVectors":  func() error { _, err := idx.ListVectors(ctx, nil); return err },
+		"QueryVectors": func() error { _, err := idx.QueryVectors(ctx, VectorQueryVectorsOptions{TopK: 1}); return err },
+		"DeleteVectors": func() error {
+			return idx.DeleteVectors(ctx, VectorDeleteVectorsOptions{Keys: []string{"k"}})
+		},
+	}
+	for action, call := range calls {
+		n := len(reqs())
+		err := call()
+		var se *Error
+		if !errors.As(err, &se) || se.Status != 404 || se.StatusCode != "404" || se.Code != "S3VectorNotFoundException" ||
+			se.Message != "missing" || se.Namespace != "vectors" {
+			t.Errorf("%s: err = %+v", action, err)
+		}
+		if got := reqs(); len(got) != n+1 || got[n].Path != "/storage/v1/vector/"+action {
+			t.Errorf("%s: unexpected requests", action)
+		}
+	}
+}
