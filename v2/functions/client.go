@@ -138,7 +138,9 @@ type InvokeOptions struct {
 	// Body is the request payload. Unless Headers sets Content-Type, it is
 	// sent as follows:
 	//   - nil, "", an empty []byte, or a nil pointer, map, slice or
-	//     interface value: no body (upstream sends no body for falsy values)
+	//     interface value: no body (upstream sends no body for null/undefined;
+	//     note that false and 0 are JSON-encoded here, which sends the same
+	//     bytes as upstream but as application/json instead of text/plain)
 	//   - string: text/plain
 	//   - []byte or io.Reader: application/octet-stream (readers are streamed)
 	//   - url.Values: application/x-www-form-urlencoded

@@ -426,6 +426,13 @@ func (c *Client) isConnected() bool { return c.conn != nil && c.conn.opened }
 // broadcast handlers, the Logger). Once Disconnect returns nil none of
 // them runs again unless the client is used again. Called from a user
 // callback, Disconnect does not wait for the callback queue it runs on.
+//
+// That exemption covers only the calling callback's own goroutine. A
+// callback must not block waiting on another goroutine that calls
+// Disconnect, Subscribe or SetAuth on this client: Disconnect would wait
+// for the callback, and the callback for Disconnect, until ctx expires.
+// Pass a bounded ctx when calling Disconnect from code that may run
+// inside callbacks.
 func (c *Client) Disconnect(ctx context.Context) error {
 	return c.DisconnectWithCode(ctx, wsCloseNormal, "")
 }
