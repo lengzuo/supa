@@ -1,6 +1,7 @@
 package postgrest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -225,9 +226,9 @@ type RPCOptions struct {
 // RPC calls the Postgres function fn with args (a struct or map encoded as
 // a JSON object; nil means no arguments). A []byte or json.RawMessage is
 // used as raw JSON text and must be valid JSON. The returned FilterBuilder
-// supports filters and modifiers on set-returning functions. A nil or
-// empty []byte or json.RawMessage means no arguments. At most one
-// RPCOptions is used (the last).
+// supports filters and modifiers on set-returning functions. A nil, empty
+// or whitespace-only []byte or json.RawMessage means no arguments. At most
+// one RPCOptions is used (the last).
 func (c *Client) RPC(fn string, args any, opts ...RPCOptions) FilterBuilder {
 	if c == nil || c.t == nil {
 		return FilterBuilder{header: http.Header{}, err: errNoClient}
@@ -296,13 +297,14 @@ func (c *Client) RPC(fn string, args any, opts ...RPCOptions) FilterBuilder {
 	return b
 }
 
-// isEmptyRaw reports whether v is a zero-length []byte or json.RawMessage.
+// isEmptyRaw reports whether v is a []byte or json.RawMessage that is empty
+// or only whitespace.
 func isEmptyRaw(v any) bool {
 	switch x := v.(type) {
 	case json.RawMessage:
-		return len(x) == 0
+		return len(bytes.TrimSpace(x)) == 0
 	case []byte:
-		return len(x) == 0
+		return len(bytes.TrimSpace(x)) == 0
 	}
 	return false
 }
