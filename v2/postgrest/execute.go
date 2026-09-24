@@ -70,7 +70,7 @@ func (b FilterBuilder) Execute(ctx context.Context) (*Response, error) {
 	}
 	resp, err := b.c.send(ctx, req, retry)
 	if err != nil {
-		return nil, b.c.networkError(err, b.c.t.URL(b.path, query))
+		return nil, b.c.networkError(err, b.c.hintURL(b.path, query))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return b.process(resp, h)
@@ -298,7 +298,7 @@ func (c *Client) GetOpenAPISpec(ctx context.Context) (*OpenAPISpec, error) {
 	req := &transport.Request{Method: http.MethodGet, Path: "/", Header: h}
 	resp, err := c.send(ctx, req, !c.retry.Disabled)
 	if err != nil {
-		return nil, c.networkError(err, c.t.URL("/", nil))
+		return nil, c.networkError(err, c.hintURL("/", nil))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
@@ -320,4 +320,15 @@ func (c *Client) GetOpenAPISpec(ctx context.Context) (*OpenAPISpec, error) {
 		msg = statusText(resp)
 	}
 	return nil, &Error{Message: msg, Status: resp.StatusCode}
+}
+
+// hintURL returns the request URL for error hints (e.g. the URL-length
+// hint). A malformed query already failed before sending, so an error here
+// only yields an empty string.
+func (c *Client) hintURL(path string, query url.Values) string {
+	u, err := c.t.URL(path, query)
+	if err != nil {
+		return ""
+	}
+	return u
 }
