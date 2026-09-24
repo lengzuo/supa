@@ -2,7 +2,7 @@ features:
   database.configuration.auto_retry:
     status: implemented
     symbols: [postgrest.Config, postgrest.RetryPolicy, postgrest.FilterBuilder.Retry]
-    tests: [TestRetry, TestRetryPolicyDelay, TestRetryPolicyDelayOverflow, TestParseRetryAfter, TestRetryCancelledDuringBackoff, TestSleepCtx]
+    tests: [TestRetry, TestRetryPolicyDelay, TestRetryPolicyDelayOverflow, TestParseRetryAfter, TestRetryCancelledDuringBackoff, TestSleepCtx, TestRetryAfterCappedAtMaxDelay]
     reason: ""
   database.configuration.request_timeout:
     status: implemented
@@ -47,7 +47,7 @@ features:
   database.query.rpc:
     status: implemented
     symbols: [postgrest.Client.RPC, postgrest.RPCOptions]
-    tests: [TestRPC, TestRPCGetHead, TestRawJSONBodies, TestIsJSONObjectish]
+    tests: [TestRPC, TestRPCGetHead, TestRawJSONBodies, TestIsJSONObjectish, TestRPCEmptyRawArgs]
     reason: ""
   database.query.schema_selection:
     status: implemented

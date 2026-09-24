@@ -1,6 +1,7 @@
 package postgrest
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -86,11 +87,15 @@ func lastOpt[T any](opts []T) T {
 }
 
 func (q QueryBuilder) builder(method string) FilterBuilder {
+	h := q.header.Clone()
+	if h == nil {
+		h = http.Header{} // zero QueryBuilder; Execute reports errNoClient
+	}
 	return FilterBuilder{
 		c:      q.c,
 		method: method,
 		path:   q.path,
-		header: q.header.Clone(),
+		header: h,
 		err:    q.err,
 	}
 }
@@ -220,18 +225,25 @@ type RPCOptions struct {
 // RPC calls the Postgres function fn with args (a struct or map encoded as
 // a JSON object; nil means no arguments). A []byte or json.RawMessage is
 // used as raw JSON text and must be valid JSON. The returned FilterBuilder
-// supports filters and modifiers on set-returning functions. At most one
+// supports filters and modifiers on set-returning functions. A nil or
+// empty []byte or json.RawMessage means no arguments. At most one
 // RPCOptions is used (the last).
 func (c *Client) RPC(fn string, args any, opts ...RPCOptions) FilterBuilder {
-	if c == nil {
-		return FilterBuilder{err: errNoClient}
+	if c == nil || c.t == nil {
+		return FilterBuilder{header: http.Header{}, err: errNoClient}
 	}
 	o := lastOpt(opts)
 	b := FilterBuilder{c: c, path: "/rpc/" + url.PathEscape(fn), header: c.headers.Clone(), isRPC: true}
+	if b.header == nil {
+		b.header = http.Header{}
+	}
 	if fn == "" {
 		b.setErr(errors.New("postgrest: function name is required"))
 	}
 	body := []byte("{}")
+	if isEmptyRaw(args) {
+		args = nil // zero-length raw JSON means no arguments, like nil
+	}
 	if args != nil {
 		enc, err := encodeJSONBody(args)
 		if err != nil {
@@ -282,4 +294,15 @@ func (c *Client) RPC(fn string, args any, opts ...RPCOptions) FilterBuilder {
 		b.header.Set(headerPrefer, "count="+string(o.Count))
 	}
 	return b
+}
+
+// isEmptyRaw reports whether v is a zero-length []byte or json.RawMessage.
+func isEmptyRaw(v any) bool {
+	switch x := v.(type) {
+	case json.RawMessage:
+		return len(x) == 0
+	case []byte:
+		return len(x) == 0
+	}
+	return false
 }

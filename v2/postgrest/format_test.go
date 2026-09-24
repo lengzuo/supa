@@ -1,12 +1,14 @@
 package postgrest
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"math"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +38,11 @@ type label struct{ a, b string }
 
 func (l label) String() string { return l.a + "," + l.b }
 
+// ptrStringer has a pointer-receiver String method.
+type ptrStringer struct{ s string }
+
+func (p *ptrStringer) String() string { return p.s }
+
 // textVal is an encoding.TextMarshaler.
 type textVal struct{}
 
@@ -64,6 +71,9 @@ func TestFormatValue(t *testing.T) {
 	active := statusActive
 	ts := time.Date(2024, 1, 2, 3, 4, 5, 600, time.UTC)
 	var nilIface any
+	u, _ := url.Parse("http://x/a?b=c")
+	far := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) // MarshalText fails for year > 9999
+	hour := time.Hour
 	var nilStringer *label
 	tests := []struct {
 		name     string
@@ -97,6 +107,17 @@ func TestFormatValue(t *testing.T) {
 		{"stringer_named_string", code("abc"), "abc", false},
 		{"stringer_struct", label{"a", "b"}, "a,b", false},
 		{"stringer_struct_pointer", &label{"x", "y"}, "x,y", false},
+		{"url_pointer", u, "http://x/a?b=c", false},
+		{"url_pointer_pointer", &u, "http://x/a?b=c", false},
+		{"pointer_receiver_stringer", &ptrStringer{"a,b"}, "a,b", false},
+		{"bytes_buffer", bytes.NewBufferString("buf"), "buf", false},
+		{"time_pointer_year_10000", &far, "10000-01-01T00:00:00Z", false},
+		{"duration_hour", time.Hour, "3600000000 microseconds", false},
+		{"duration_pointer", &hour, "3600000000 microseconds", false},
+		{"duration_zero", time.Duration(0), "0 microseconds", false},
+		{"duration_fraction", 1500 * time.Nanosecond, "1.5 microseconds", false},
+		{"duration_negative", -time.Millisecond, "-1000 microseconds", false},
+		{"duration_min", time.Duration(math.MinInt64), "-9223372036854775.808 microseconds", false},
 		{"text_marshaler", textVal{}, "(t)", false},
 		{"text_marshaler_int", textEnum(3), "named", false},
 		{"null_string_valid", sql.NullString{String: "x", Valid: true}, "x", false},
@@ -163,6 +184,27 @@ func TestFilterValueKindsOnWire(t *testing.T) {
 	assertEq(t, "status", q.Get("status"), "eq.1")
 	assertEq(t, "owner", q.Get("owner"), "eq.null")
 	assertEq(t, "n", q.Get("n"), "eq.3")
+
+	u, _ := url.Parse("http://x/a?b=c")
+	active := statusActive
+	_, err = c.From("tasks").Select("*").
+		Eq("link", u).
+		Eq("p", &ptrStringer{"v"}).
+		Eq("s", &active).
+		Lt("ttl", 90*time.Second).
+		In("in", []any{u, &ptrStringer{"a,b"}, &active}).
+		Contains("tags", []any{u, &ptrStringer{"a,b"}, &active}).
+		Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q = f.last(t).Query
+	assertEq(t, "link", q.Get("link"), "eq.http://x/a?b=c")
+	assertEq(t, "pointer stringer", q.Get("p"), "eq.v")
+	assertEq(t, "enum pointer", q.Get("s"), "eq.1")
+	assertEq(t, "duration", q.Get("ttl"), "lt.90000000 microseconds")
+	assertEq(t, "in", q.Get("in"), `in.(http://x/a?b=c,"a,b",1)`)
+	assertEq(t, "cs", q.Get("tags"), `cs.{http://x/a?b=c,"a,b",1}`)
 }
 
 // upstream: postgrest-js src/PostgrestFilterBuilder.ts in (PostgrestReservedCharsRegexp)

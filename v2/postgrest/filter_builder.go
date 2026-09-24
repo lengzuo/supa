@@ -26,8 +26,10 @@ import (
 // sql.NullString) uses its text or database value; numbers, booleans and
 // strings use their literal form, even when the type has a String method
 // (so a stringer-style int enum is sent as its number); time.Time is RFC
-// 3339; other fmt.Stringer values use String; slices are comma-joined;
-// maps and structs are JSON.
+// 3339; time.Duration is a Postgres interval literal in microseconds
+// (time.Second is "1000000 microseconds"), not a nanosecond count; other
+// fmt.Stringer values use String, including pointer-receiver methods such
+// as *url.URL; slices are comma-joined; maps and structs are JSON.
 type FilterBuilder struct {
 	c      *Client
 	method string

@@ -52,7 +52,7 @@ func (b FilterBuilder) Execute(ctx context.Context) (*Response, error) {
 	if b.err != nil {
 		return nil, b.err
 	}
-	if b.c == nil {
+	if b.c == nil || b.c.t == nil {
 		return nil, errNoClient
 	}
 	if ctx == nil {
@@ -329,6 +329,9 @@ type OpenAPISpec struct {
 // response is valid JSON that does not fit the typed fields, the spec is
 // still returned with only Raw populated.
 func (c *Client) GetOpenAPISpec(ctx context.Context) (*OpenAPISpec, error) {
+	if c == nil || c.t == nil {
+		return nil, errNoClient
+	}
 	if ctx == nil {
 		return nil, errors.New("postgrest: nil context")
 	}

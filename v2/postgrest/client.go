@@ -61,7 +61,7 @@ type Config struct {
 	// Retry configures automatic retries. Nil means the upstream default:
 	// up to 3 retries of GET/HEAD/OPTIONS requests on network errors and
 	// HTTP 503/520, with exponential backoff (1s, 2s, 4s, capped at 30s)
-	// honoring Retry-After. See RetryPolicy.
+	// honoring Retry-After (capped at the maximum delay). See RetryPolicy.
 	Retry *RetryPolicy
 	// URLLengthLimit is the URL length above which an aborted request's
 	// error hint mentions the URL length. Defaults to DefaultURLLengthLimit.
@@ -85,9 +85,11 @@ type RetryPolicy struct {
 	MaxRetries int
 	// BaseDelay is the delay before the first retry; it doubles on each
 	// following retry. Values <= 0 mean 1s. A Retry-After header (in
-	// seconds) takes precedence.
+	// seconds) takes precedence, capped at MaxDelay.
 	BaseDelay time.Duration
-	// MaxDelay caps the exponential delay. Values <= 0 mean 30s.
+	// MaxDelay caps the exponential delay and any Retry-After delay, so a
+	// server cannot stall a query longer than this per retry. Values <= 0
+	// mean 30s.
 	MaxDelay time.Duration
 }
 
@@ -98,15 +100,30 @@ func (p RetryPolicy) maxRetries() int {
 	return p.MaxRetries
 }
 
+func (p RetryPolicy) maxDelay() time.Duration {
+	if p.MaxDelay <= 0 {
+		return 30 * time.Second
+	}
+	return p.MaxDelay
+}
+
+// retryAfterDelay returns the Retry-After delay capped at MaxDelay.
+// postgrest-js does not cap it; a cap keeps a server from blocking a query
+// for hours.
+func (p RetryPolicy) retryAfterDelay(v string) time.Duration {
+	d := parseRetryAfter(v)
+	if m := p.maxDelay(); d > m {
+		return m
+	}
+	return d
+}
+
 // delay returns the backoff before retry number attempt+1 (attempt is
 // zero-based), matching postgrest-js getRetryDelay.
 func (p RetryPolicy) delay(attempt int) time.Duration {
-	base, maxDelay := p.BaseDelay, p.MaxDelay
+	base, maxDelay := p.BaseDelay, p.maxDelay()
 	if base <= 0 {
 		base = time.Second
-	}
-	if maxDelay <= 0 {
-		maxDelay = 30 * time.Second
 	}
 	// base << attempt would overflow for large attempts; compare against
 	// maxDelay >> attempt instead (0 once attempt >= 63).
@@ -208,17 +225,25 @@ func New(cfg Config) (*Client, error) {
 // must be exposed in the project's API settings. The receiver is not
 // modified.
 func (c *Client) Schema(schema string) *Client {
+	if c == nil {
+		return nil
+	}
 	cp := *c
 	cp.schema = schema
 	return &cp
 }
 
 // SchemaName returns the schema this client queries.
-func (c *Client) SchemaName() string { return c.schema }
+func (c *Client) SchemaName() string {
+	if c == nil {
+		return ""
+	}
+	return c.schema
+}
 
 // From starts a query on a table or view.
 func (c *Client) From(relation string) QueryBuilder {
-	if c == nil {
+	if c == nil || c.t == nil {
 		return QueryBuilder{err: errNoClient}
 	}
 	q := QueryBuilder{c: c, header: c.headers}
@@ -256,7 +281,7 @@ func (c *Client) send(ctx context.Context, req *transport.Request, retryEnabled 
 				return resp, nil
 			}
 			if ra, ok := resp.Header["Retry-After"]; ok && len(ra) > 0 {
-				wait = parseRetryAfter(ra[0])
+				wait = c.retry.retryAfterDelay(ra[0])
 			} else {
 				wait = c.retry.delay(attempt)
 			}
