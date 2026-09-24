@@ -10,7 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +40,76 @@ type Config struct {
 	Logger *slog.Logger
 	// Timeout bounds each request attempt when > 0.
 	Timeout time.Duration
+	// Retry enables automatic retries of replayable requests. Nil (the
+	// default) disables retries. Streamed uploads are never retried.
+	Retry *RetryPolicy
+	// UseNewHostname rewrites a hosted project URL such as
+	// https://<ref>.supabase.co/storage/v1 to the dedicated storage host
+	// https://<ref>.storage.supabase.co/storage/v1, which does not buffer
+	// requests and so allows uploads larger than 50GB. Other hosts
+	// (self-hosted, local) are left unchanged.
+	UseNewHostname bool
+}
+
+// RetryPolicy controls automatic retries. Only requests whose body can be
+// replayed are retried, so streamed uploads are always sent once.
+type RetryPolicy struct {
+	// MaxAttempts is the total number of attempts, including the first.
+	// Values <= 1 disable retries.
+	MaxAttempts int
+	// Methods lists the HTTP methods eligible for retry. Empty means GET,
+	// HEAD and OPTIONS.
+	Methods []string
+	// StatusCodes lists response statuses that trigger a retry. Empty
+	// means 503 and 520.
+	StatusCodes []int
+	// RetryNetworkErrors also retries when the request fails without a
+	// response. Context cancellation is never retried.
+	RetryNetworkErrors bool
+	// BaseDelay is the initial backoff; it doubles every attempt (with
+	// jitter) up to MaxDelay. Zero defaults to 100ms.
+	BaseDelay time.Duration
+	// MaxDelay caps the backoff between attempts. Zero defaults to 5s.
+	MaxDelay time.Duration
+}
+
+func (p *RetryPolicy) toTransport() *transport.RetryPolicy {
+	if p == nil {
+		return nil
+	}
+	return &transport.RetryPolicy{
+		MaxAttempts:        p.MaxAttempts,
+		Methods:            append([]string(nil), p.Methods...),
+		StatusCodes:        append([]int(nil), p.StatusCodes...),
+		RetryNetworkErrors: p.RetryNetworkErrors,
+		BaseDelay:          p.BaseDelay,
+		MaxDelay:           p.MaxDelay,
+	}
+}
+
+// supabaseHost matches hosted Supabase domains that have a dedicated
+// storage hostname.
+var supabaseHost = regexp.MustCompile(`supabase\.(co|in|red)$`)
+
+// storageURL applies Config.UseNewHostname to rawURL, mirroring the
+// storage-js StorageBucketApi constructor.
+func storageURL(rawURL string, useNewHostname bool) (string, error) {
+	if !useNewHostname {
+		return rawURL, nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("storage: invalid URL: %w", err)
+	}
+	host := u.Hostname()
+	if supabaseHost.MatchString(host) && !strings.Contains(host, "storage.supabase.") {
+		newHost := strings.Replace(host, "supabase.", "storage.supabase.", 1)
+		if port := u.Port(); port != "" {
+			newHost = net.JoinHostPort(newHost, port)
+		}
+		u.Host = newHost
+	}
+	return u.String(), nil
 }
 
 // Client talks to Supabase Storage.
@@ -54,8 +127,12 @@ func New(cfg Config) (*Client, error) {
 	for _, ed := range cfg.RequestEditors {
 		editors = append(editors, ed)
 	}
+	baseURL, err := storageURL(cfg.URL, cfg.UseNewHostname)
+	if err != nil {
+		return nil, err
+	}
 	t, err := transport.New(transport.Config{
-		BaseURL:          cfg.URL,
+		BaseURL:          baseURL,
 		APIKey:           cfg.APIKey,
 		HTTPClient:       cfg.HTTPClient,
 		Headers:          cfg.Headers,
@@ -64,6 +141,7 @@ func New(cfg Config) (*Client, error) {
 		Editors:          editors,
 		Logger:           cfg.Logger,
 		Timeout:          cfg.Timeout,
+		Retry:            cfg.Retry.toTransport(),
 	})
 	if err != nil {
 		return nil, err

@@ -1,0 +1,211 @@
+features:
+  storage.configuration.auto_retry:
+    status: implemented
+    symbols: [storage.Config.Retry, storage.RetryPolicy]
+    tests: [TestRetryPolicy]
+    reason: ""
+  storage.errors.error_codes:
+    status: implemented
+    symbols: [storage.Error.Code, storage.CodeNoSuchKey, storage.CodeNoSuchBucket, storage.CodeResourceAlreadyExists, storage.CodeAccessDenied, storage.IsErrorCode]
+    tests: [TestGetBucketError, TestCreateBucketConflict, TestGetBucketLifecycleError, TestUploadErrors, TestDownloadError, TestIsErrorCodeWrapped, TestDeleteBucketNonJSONError]
+    reason: ""
+  storage.file_buckets.access_bucket:
+    status: implemented
+    symbols: [storage.Client.From, storage.FileAPI.BucketID]
+    tests: [TestUpload, TestConcurrentUse]
+    reason: ""
+  storage.file_buckets.bucket_versioning_status:
+    status: implemented
+    symbols: [storage.Client.CreateBucket, storage.Client.UpdateBucket, storage.Client.GetBucket, storage.Client.ListBuckets, storage.Bucket.VersioningStatus, storage.BucketOptions.VersioningStatus, storage.VersioningStatus]
+    tests: [TestCreateBucket, TestUpdateBucket, TestListBuckets]
+    reason: ""
+  storage.file_buckets.get_bucket_lifecycle:
+    status: implemented
+    symbols: [storage.Client.GetBucketLifecycle, storage.BucketLifecycleConfiguration, storage.LifecycleRule, storage.NoncurrentVersionExpiration]
+    tests: [TestGetBucketLifecycle, TestGetBucketLifecycleError]
+    reason: ""
+  storage.file_buckets.update_bucket_lifecycle:
+    status: implemented
+    symbols: [storage.Client.UpdateBucketLifecycle]
+    tests: [TestUpdateBucketLifecycle]
+    reason: ""
+  storage.file_buckets.delete_bucket_lifecycle:
+    status: implemented
+    symbols: [storage.Client.DeleteBucketLifecycle]
+    tests: [TestDeleteBucketLifecycle]
+    reason: ""
+  storage.file_buckets.copy:
+    status: implemented
+    symbols: [storage.FileAPI.Copy]
+    tests: [TestCopy]
+    reason: ""
+  storage.file_buckets.copy_specific_version:
+    status: implemented
+    symbols: [storage.FileAPI.Copy, storage.DestinationOptions.SourceVersionID]
+    tests: [TestCopyCrossBucketVersion]
+    reason: ""
+  storage.file_buckets.copy_cross_bucket:
+    status: implemented
+    symbols: [storage.FileAPI.Copy, storage.DestinationOptions.DestinationBucket]
+    tests: [TestCopyCrossBucketVersion]
+    reason: ""
+  storage.file_buckets.create_file_bucket:
+    status: implemented
+    symbols: [storage.Client.CreateBucket, storage.BucketOptions]
+    tests: [TestCreateBucket, TestCreateBucketConflict]
+    reason: ""
+  storage.file_buckets.create_signed_upload_url:
+    status: implemented
+    symbols: [storage.FileAPI.CreateSignedUploadURL, storage.SignedUploadURL]
+    tests: [TestCreateSignedUploadURL, TestCreateSignedUploadURLNoToken]
+    reason: ""
+  storage.file_buckets.create_signed_url:
+    status: implemented
+    symbols: [storage.FileAPI.CreateSignedURL, storage.URLOptions]
+    tests: [TestCreateSignedURL, TestCreateSignedURLOptions, TestCreateSignedURLError]
+    reason: ""
+  storage.file_buckets.create_signed_urls:
+    status: implemented
+    symbols: [storage.FileAPI.CreateSignedURLs, storage.SignedURLResult]
+    tests: [TestCreateSignedURLs]
+    reason: ""
+  storage.file_buckets.delete_file_bucket:
+    status: implemented
+    symbols: [storage.Client.DeleteBucket]
+    tests: [TestDeleteBucket, TestDeleteBucketNonJSONError]
+    reason: ""
+  storage.file_buckets.download:
+    status: implemented
+    symbols: [storage.FileAPI.Download]
+    tests: [TestDownload, TestDownloadError]
+    reason: ""
+  storage.file_buckets.download_specific_version:
+    status: implemented
+    symbols: [storage.FileAPI.Download, storage.DownloadOptions.VersionID]
+    tests: [TestDownloadVersion]
+    reason: ""
+  storage.file_buckets.download_as_stream:
+    status: implemented
+    symbols: [storage.FileAPI.DownloadStream]
+    tests: [TestDownloadStream, TestDownloadStreamCancellation]
+    reason: ""
+  storage.file_buckets.download_with_transform:
+    status: implemented
+    symbols: [storage.FileAPI.Download, storage.DownloadOptions.Transform, storage.TransformOptions]
+    tests: [TestDownloadWithTransform]
+    reason: ""
+  storage.file_buckets.empty_bucket:
+    status: implemented
+    symbols: [storage.Client.EmptyBucket]
+    tests: [TestEmptyBucket]
+    reason: ""
+  storage.file_buckets.file_exists:
+    status: implemented
+    symbols: [storage.FileAPI.Exists]
+    tests: [TestExists]
+    reason: ""
+  storage.file_buckets.file_info:
+    status: implemented
+    symbols: [storage.FileAPI.Info, storage.FileInfo]
+    tests: [TestInfo]
+    reason: ""
+  storage.file_buckets.file_info_specific_version:
+    status: implemented
+    symbols: [storage.FileAPI.Info, storage.InfoOptions.VersionID, storage.FileInfo.ArchivedAt, storage.FileInfo.IsDeleteMarker, storage.FileInfo.IsVersioned]
+    tests: [TestInfoVersion, TestInfo]
+    reason: ""
+  storage.file_buckets.get_bucket:
+    status: implemented
+    symbols: [storage.Client.GetBucket, storage.Bucket]
+    tests: [TestGetBucket, TestGetBucketError]
+    reason: ""
+  storage.file_buckets.get_public_url:
+    status: implemented
+    symbols: [storage.FileAPI.GetPublicURL]
+    tests: [TestGetPublicURL]
+    reason: ""
+  storage.file_buckets.list_file_buckets:
+    status: implemented
+    symbols: [storage.Client.ListBuckets, storage.ListBucketsOptions]
+    tests: [TestListBuckets]
+    reason: ""
+  storage.file_buckets.list_files:
+    status: implemented
+    symbols: [storage.FileAPI.List, storage.FileAPI.ListV2, storage.ListFilesOptions, storage.ListFilesV2Options, storage.ListV2Result]
+    tests: [TestList, TestListOptions, TestListV2, TestListError]
+    reason: ""
+  storage.file_buckets.list_file_versions:
+    status: implemented
+    symbols: [storage.FileAPI.List, storage.FileAPI.ListV2, storage.ListFilesOptions.NoncurrentVersions, storage.ListFilesOptions.DeleteMarkers, storage.ListFilesOptions.ExactMatch, storage.ListFilesV2Options.NoncurrentVersions, storage.FileObject.Version, storage.ListV2Object.Version]
+    tests: [TestListOptions, TestListV2, TestList]
+    reason: ""
+  storage.file_buckets.move:
+    status: implemented
+    symbols: [storage.FileAPI.Move]
+    tests: [TestMove]
+    reason: ""
+  storage.file_buckets.move_specific_version:
+    status: implemented
+    symbols: [storage.FileAPI.Move, storage.DestinationOptions.SourceVersionID]
+    tests: [TestMoveCrossBucketVersion]
+    reason: ""
+  storage.file_buckets.move_cross_bucket:
+    status: implemented
+    symbols: [storage.FileAPI.Move, storage.DestinationOptions.DestinationBucket]
+    tests: [TestMoveCrossBucketVersion]
+    reason: ""
+  storage.file_buckets.purge_bucket_cache:
+    status: implemented
+    symbols: [storage.Client.PurgeBucketCache, storage.PurgeCacheOptions]
+    tests: [TestPurgeBucketCache]
+    reason: ""
+  storage.file_buckets.purge_cache:
+    status: implemented
+    symbols: [storage.FileAPI.PurgeCache]
+    tests: [TestPurgeCache]
+    reason: ""
+  storage.file_buckets.remove:
+    status: implemented
+    symbols: [storage.FileAPI.Remove]
+    tests: [TestRemove]
+    reason: ""
+  storage.file_buckets.remove_specific_version:
+    status: implemented
+    symbols: [storage.FileAPI.RemoveVersions, storage.DeleteObjectEntry]
+    tests: [TestRemoveVersions]
+    reason: ""
+  storage.file_buckets.update_bucket:
+    status: implemented
+    symbols: [storage.Client.UpdateBucket]
+    tests: [TestUpdateBucket]
+    reason: ""
+  storage.file_buckets.update_file:
+    status: implemented
+    symbols: [storage.FileAPI.Update]
+    tests: [TestUpdateFile]
+    reason: ""
+  storage.file_buckets.upload:
+    status: implemented
+    symbols: [storage.FileAPI.Upload, storage.FileOptions]
+    tests: [TestUpload, TestUploadErrors]
+    reason: ""
+  storage.file_buckets.upload_with_metadata:
+    status: implemented
+    symbols: [storage.FileAPI.Upload, storage.FileOptions.Metadata]
+    tests: [TestUploadWithMetadataAndOptions]
+    reason: ""
+  storage.file_buckets.upload_with_signed_url:
+    status: implemented
+    symbols: [storage.FileAPI.UploadToSignedURL]
+    tests: [TestUploadToSignedURL]
+    reason: ""
+  storage.file_buckets.url_cache_nonce:
+    status: implemented
+    symbols: [storage.URLOptions.CacheNonce, storage.SignedURLsOptions.CacheNonce, storage.DownloadOptions.CacheNonce, storage.FileAPI.GetPublicURL, storage.FileAPI.CreateSignedURL, storage.FileAPI.CreateSignedURLs]
+    tests: [TestGetPublicURL, TestCreateSignedURLOptions, TestCreateSignedURLs, TestDownloadVersion]
+    reason: ""
+  storage.file_buckets.request_cancellation:
+    status: implemented
+    symbols: [storage.FileAPI.Download, storage.FileAPI.DownloadStream]
+    tests: [TestDownloadCancellation, TestDownloadStreamCancellation]
+    reason: ""
