@@ -123,7 +123,7 @@ func (b *QueryRequestBuilder) Execute(ctx context.Context, result interface{}) e
 		return err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in execute with context due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in execute with context with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		var reqError PostgresError
 		if err = json.Unmarshal(httpResp.Body.Bytes(), &reqError); err != nil {
 			return err

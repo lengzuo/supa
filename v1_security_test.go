@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -35,11 +36,12 @@ func (b *syncBuffer) String() string {
 // the test and restores the previous package logger afterwards.
 func captureDebugLogs(t *testing.T) *syncBuffer {
 	t.Helper()
-	prev := logger
+	prev := logger.load()
 	buf := &syncBuffer{}
-	newLogger(true)
-	logger.setOutput(buf)
-	t.Cleanup(func() { logger = prev })
+	l := buildLogger(true)
+	l.setOutput(buf)
+	logger.store(l)
+	t.Cleanup(func() { logger.store(prev) })
 	return buf
 }
 
@@ -220,16 +222,175 @@ func TestDebugLoggingRedactsSecrets(t *testing.T) {
 	}
 }
 
-func TestPrintURLRedactsSensitiveQueryParams(t *testing.T) {
-	got := printURL("https://u:pw@x.supabase.co/auth/v1/verify?token=abc123&type=signup&Access_Token=zzz&select=*")
-	for _, secret := range []string{"abc123", "zzz", "pw"} {
+func TestPrintURLRedactsAllQueryValues(t *testing.T) {
+	got := printURL("https://u:pw@x.supabase.co/rest/v1/users?token=abc123&email=eq.alice%40example.com&Access_Token=zzz#frag-secret")
+	for _, secret := range []string{"abc123", "alice", "zzz", "pw", "frag-secret"} {
 		if strings.Contains(got, secret) {
 			t.Errorf("printURL leaked %q: %s", secret, got)
 		}
 	}
-	if !strings.Contains(got, "type=signup") || !strings.Contains(got, "select=") {
-		t.Errorf("printURL dropped non-sensitive params: %s", got)
+	want := "https://%5BREDACTED%5D@x.supabase.co/rest/v1/users?Access_Token=[REDACTED]&email=[REDACTED]&token=[REDACTED]"
+	if got != want {
+		t.Errorf("printURL = %s, want %s", got, want)
 	}
+}
+
+func TestPrintHeaderLogsNamesOnly(t *testing.T) {
+	h := http.Header{}
+	h.Set("Authorization", "Bearer tok-SECRET")
+	h.Set("apikey", "key-SECRET")
+	h.Set("X-Custom", "custom-SECRET")
+	got := printHeader(h)
+	if got != "[Apikey,Authorization,X-Custom]" {
+		t.Errorf("printHeader = %s", got)
+	}
+}
+
+func TestErrorResponseBodiesAreNotLogged(t *testing.T) {
+	// Bodies modelled on real PostgREST / GoTrue / Storage errors whose
+	// free-text fields echo row data and input values.
+	bodies := map[string]string{
+		// PostgREST 23505 unique_violation
+		"/rest/v1/users": `{"code":"23505","details":"Key (email)=(alice-SECRET@example.com) already exists.","hint":null,"message":"duplicate key value violates unique constraint \"users_email_key\""}`,
+		// PostgREST 23514 check_violation
+		"/rest/v1/orders": `{"code":"23514","details":"Failing row contains (42, card-SECRET-4242, -1).","hint":null,"message":"new row for relation \"orders\" violates check constraint \"orders_amount_check\""}`,
+		// PostgREST 22P02 invalid_text_representation, via RPC
+		"/rest/v1/rpc/lookup": `{"code":"22P02","details":null,"hint":null,"message":"invalid input syntax for type uuid: \"ssn-SECRET-123\""}`,
+		// GoTrue
+		"/auth/v1/signup": `{"code":422,"error_code":"weak_password","msg":"Password pwd-SECRET is too weak"}`,
+		// Storage echoing the object key
+		"/storage/v1/object/bucket/private/key-SECRET.pdf": `{"statusCode":"409","code":"Duplicate","error":"Duplicate","message":"The resource private/key-SECRET.pdf already exists"}`,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := bodies[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	logs := captureDebugLogs(t)
+	ctx := context.Background()
+
+	db := NewPostgres("example", WithPostgresClient(srv.Client(), nil))
+	base, err := url.Parse(srv.URL + restAPIPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.baseURL = *base
+	for table, code := range map[string]string{"users": "23505", "orders": "23514"} {
+		err := db.From(table).Insert(struct {
+			X string `json:"x"`
+		}{"y"}).Execute(ctx, nil)
+		var pgErr *PostgresError
+		if !errors.As(err, &pgErr) || pgErr.Code != code || !strings.Contains(pgErr.Details, "SECRET") {
+			t.Errorf("%s: want full PostgresError with code %s returned, got %v", table, code, err)
+		}
+	}
+	if err := db.RPC("lookup", struct {
+		ID string `json:"id"`
+	}{"x"}).Execute(ctx, nil); err == nil || !strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("rpc: want full error returned, got %v", err)
+	}
+
+	auth := NewAuth("anon", srv.URL+"/auth/v1", WithAuthClient(srv.Client(), nil))
+	if _, err := auth.SignUp(ctx, SignUpRequest{Email: "a@example.com", Password: "p"}); err == nil || !strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("signup: want full error body returned, got %v", err)
+	}
+
+	st := NewStorage("anon", srv.URL+"/storage/v1", "bucket", WithStorageClient(srv.Client(), nil))
+	if err := st.UploadFile(ctx, "private/key-SECRET.pdf", "application/pdf", strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("storage: want full error body returned, got %v", err)
+	}
+
+	out := logs.String()
+	for _, code := range []string{"23505", "23514", "22P02", "weak_password", "Duplicate"} {
+		if !strings.Contains(out, code) {
+			t.Errorf("expected error code %q in logs:\n%s", code, out)
+		}
+	}
+	for _, secret := range []string{"alice-SECRET", "card-SECRET", "ssn-SECRET", "pwd-SECRET", "already exists", "Failing row", "invalid input syntax"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("log leaked %q:\n%s", secret, out)
+		}
+	}
+	// The storage object key legitimately appears in the debug request URL
+	// (it is the request path), but never in the logged error.
+	warnings := 0
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, `"level":"warn"`) {
+			continue
+		}
+		warnings++
+		if strings.Contains(line, "SECRET") {
+			t.Errorf("warning leaked response body: %s", line)
+		}
+	}
+	if warnings != 5 {
+		t.Errorf("expected 5 warnings, got %d:\n%s", warnings, out)
+	}
+}
+
+func TestNewRequestErrorRedactsURL(t *testing.T) {
+	logs := captureDebugLogs(t)
+	r := newRequester(&http.Client{}, nil)
+	bad := "http://example.com/\x7f?token=tok-SECRET"
+	_, err := r.Call(context.Background(), bad, http.MethodGet, nil, func(*http.Request) {})
+	if err == nil {
+		t.Fatal("expected an error for an invalid URL")
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("error type changed: %T", err)
+	}
+	if strings.Contains(err.Error(), "tok-SECRET") {
+		t.Errorf("Call error leaked token: %v", err)
+	}
+	_, err = r.Upload(context.Background(), bad, http.MethodPost, strings.NewReader("x"), func(*http.Request) {})
+	if err == nil || strings.Contains(err.Error(), "tok-SECRET") {
+		t.Errorf("Upload error missing or leaked token: %v", err)
+	}
+	if out := logs.String(); strings.Contains(out, "tok-SECRET") || !strings.Contains(out, "failed in new request") {
+		t.Errorf("unexpected logs:\n%s", out)
+	}
+}
+
+// TestNewConcurrentWithRequests reproduces the race between New swapping the
+// package logger and in-flight requests reading it.
+func TestNewConcurrentWithRequests(t *testing.T) {
+	prev := logger.load()
+	t.Cleanup(func() { logger.store(prev) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"code":"x"}`))
+	}))
+	t.Cleanup(srv.Close)
+	auth := NewAuth("anon", srv.URL+"/auth/v1", WithAuthClient(srv.Client(), nil))
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := New(Config{ApiKey: "k", ProjectRef: "p"}); err != nil {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = auth.SignOut(context.Background(), "t")
+		}()
+	}
+	close(start)
+	wg.Wait()
 }
 
 func TestTransportErrorRedactsURL(t *testing.T) {

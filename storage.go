@@ -52,7 +52,7 @@ func (i *Storage) UploadFile(ctx context.Context, targetFilePath, mimeType strin
 		return err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in sign out due to catch: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in upload file with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	return nil

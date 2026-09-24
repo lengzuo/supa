@@ -60,7 +60,7 @@ func (i Auth) ResetPasswordForEmail(ctx context.Context, body ResetPasswordForEm
 		return err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in reset password for email due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in reset password for email with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	return nil
@@ -77,7 +77,7 @@ func (i Auth) SignInWithOTP(ctx context.Context, body SignInRequest) error {
 		return err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in get sign in with otp due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in get sign in with otp with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	return nil
@@ -94,7 +94,7 @@ func (i Auth) SignInWithPassword(ctx context.Context, body SignInRequest) (*Auth
 		return nil, err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in sign in with password due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in sign in with password with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return nil, External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	var authDetail *AuthDetailResp
@@ -117,7 +117,7 @@ func (i Auth) SignUp(ctx context.Context, body SignUpRequest) (*AuthDetailResp, 
 		return nil, err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in sign up due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in sign up with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return nil, External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	var authDetail *AuthDetailResp
@@ -143,7 +143,7 @@ func (i Auth) User(ctx context.Context, token string) (*User, error) {
 		return nil, err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in get user due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in get user with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return nil, External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	var user *User
@@ -167,7 +167,7 @@ func (i Auth) UpdateUser(ctx context.Context, token string, body UpdateUserReque
 		return nil, err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in update user due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in update user with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return nil, External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	var user *User
@@ -191,7 +191,7 @@ func (i Auth) SignOut(ctx context.Context, token string) error {
 		return err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in sign out due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in sign out with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	return nil
@@ -207,7 +207,7 @@ func (i Auth) Verify(ctx context.Context, body VerifyRequest) (*AuthDetailResp, 
 		return nil, err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in verify due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in verify with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return nil, External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	var authDetail *AuthDetailResp
@@ -233,7 +233,7 @@ func (i Auth) RefreshToken(ctx context.Context, refreshToken string) (*AuthDetai
 		return nil, err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in refresh token due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in refresh token with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return nil, External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	var authDetail *AuthDetailResp
@@ -281,7 +281,7 @@ func (i Auth) SignInWithIDToken(ctx context.Context, body SignInWithIDTokenReque
 		return nil, err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in sign in with id token due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in sign in with id token with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		return nil, External(httpResp.Body.Bytes(), httpResp.StatusCode)
 	}
 	var authDetail *AuthDetailResp
