@@ -203,10 +203,16 @@ func (c *Client) URL(path string, query url.Values) (string, error) {
 		p = "/" + p
 	}
 	raw := c.base.EscapedPath() + p
-	if unescaped, err := url.PathUnescape(raw); err == nil {
-		u.Path, u.RawPath = unescaped, raw
-	} else {
-		u.Path, u.RawPath = raw, ""
+	unescaped, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("transport: malformed escaped path: %w", err)
+	}
+	u.Path, u.RawPath = unescaped, raw
+	// net/url silently discards RawPath when it is not a valid encoding of
+	// Path and re-escapes Path instead, which would turn "%2F" back into
+	// "/" and could create ".." segments. Refuse such paths.
+	if u.EscapedPath() != raw {
+		return "", fmt.Errorf("transport: path %q is not validly escaped", raw)
 	}
 	if _, err := url.ParseQuery(rawQuery); err != nil {
 		return "", fmt.Errorf("transport: malformed query in path: %w", err)

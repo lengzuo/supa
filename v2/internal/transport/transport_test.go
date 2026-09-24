@@ -358,3 +358,17 @@ func TestNilRequest(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// Review finding: an invalid escaped path must be rejected, not silently
+// re-escaped (which turns %2F into / and can create ".." segments).
+func TestURLRejectsInvalidEscaping(t *testing.T) {
+	c, _ := New(Config{BaseURL: "https://x.supabase.co/storage/v1/iceberg"})
+	for _, p := range []string{"/v1/x|%2F..%2Fadmin/namespaces", "/v1/caf\u00e9%2F..%2Fadmin", "/v1/a%zz"} {
+		if got, err := c.URL(p, nil); err == nil {
+			t.Errorf("URL(%q) = %q, want error", p, got)
+		}
+	}
+	if _, err := c.URL("/v1/a%2Fb/namespaces", nil); err != nil {
+		t.Errorf("valid escaped path rejected: %v", err)
+	}
+}
