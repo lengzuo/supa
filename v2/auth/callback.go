@@ -13,9 +13,12 @@ import (
 // query string; query parameters win.
 //
 //   - error / error_description / error_code parameters are returned as an
-//     *Error whose Code is the error_code (e.g. "otp_expired").
+//     *Error whose Code is the error_code (e.g. "otp_expired") and which
+//     also matches ErrImplicitGrantRedirect under errors.Is.
 //   - A "code" parameter (FlowPKCE) is exchanged with
-//     ExchangeCodeForSession, using the sb_flow_id parameter if present.
+//     ExchangeCodeForSession, using the sb_flow_id parameter if present (a
+//     malformed sb_flow_id fails with ErrPKCEVerifierMissing rather than
+//     falling back to another flow's verifier).
 //   - access_token, refresh_token, expires_in and token_type (FlowImplicit)
 //     are validated with GetUser and adopted as the session.
 //
@@ -41,7 +44,12 @@ func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthRes
 	}
 
 	if params["error"] != "" || params["error_description"] != "" || params["error_code"] != "" {
+		// Like auth-js AuthImplicitGrantRedirectError: the error matches
+		// ErrImplicitGrantRedirect and carries the URL's error_code.
 		msg := params["error_description"]
+		if msg == "" {
+			msg = params["error"]
+		}
 		if msg == "" {
 			msg = "Error in URL with unspecified error_description"
 		}
@@ -49,7 +57,7 @@ func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthRes
 		if code == "" {
 			code = "unspecified_code"
 		}
-		return nil, &Error{Message: msg, Code: code}
+		return nil, &Error{Message: msg, Code: code, kind: ErrImplicitGrantRedirect.Code}
 	}
 
 	switch {
@@ -62,7 +70,7 @@ func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthRes
 		if c.cfg.FlowType != FlowPKCE {
 			return nil, newError(ErrImplicitGrantRedirect.Code, "not a valid implicit grant flow url")
 		}
-		return c.ExchangeCodeForSession(ctx, params["code"], &ExchangeCodeOptions{FlowID: validPKCEFlowID(params[PKCEFlowIDParam])})
+		return c.ExchangeCodeForSession(ctx, params["code"], &ExchangeCodeOptions{FlowID: params[PKCEFlowIDParam]})
 	default:
 		return nil, newError(ErrImplicitGrantRedirect.Code, "no session defined in URL")
 	}

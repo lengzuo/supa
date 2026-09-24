@@ -820,7 +820,13 @@ func TestMFAConcurrentVerify(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if events, _ := ev.snapshot(); len(events) != 8 {
-		t.Errorf("got %d events, want 8", len(events))
+	// All verifications started from the same stored session; the first
+	// write-back replaces it, so the others (whose basis is no longer the
+	// stored session) must not overwrite it again.
+	if events, _ := ev.snapshot(); len(events) != 1 {
+		t.Errorf("got %d events, want 1", len(events))
+	}
+	if stored, _ := c.loadSession(context.Background()); stored == nil || stored.AccessToken == "stored-access-token" {
+		t.Errorf("stored session not upgraded: %+v", stored)
 	}
 }

@@ -192,3 +192,78 @@ func TestAMREntryUnmarshal(t *testing.T) {
 		t.Fatalf("amr = %+v", c.AMR)
 	}
 }
+
+// upstream: auth-js src/GoTrueClient.ts getClaims + lib/helpers.ts getAlgorithm (algorithm confusion)
+func TestGetClaimsAlgorithmConfusion(t *testing.T) {
+	ctx := context.Background()
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signRSA := func(k *rsa.PrivateKey) func([]byte) []byte {
+		return func(d []byte) []byte {
+			s, err := rsa.SignPKCS1v15(rand.Reader, k, crypto.SHA256, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}
+	}
+	signEC := func(d []byte) []byte {
+		r, s, err := ecdsa.Sign(rand.Reader, ecKey, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]byte, 64)
+		r.FillBytes(out[:32])
+		s.FillBytes(out[32:])
+		return out
+	}
+	signPSS := func(d []byte) []byte {
+		s, err := rsa.SignPSS(rand.Reader, rsaKey, crypto.SHA256, d, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	keys := []JWK{rsaJWK("rsa", &rsaKey.PublicKey), ecJWK("ec", &ecKey.PublicKey), rsaJWK("weak", &weakKey.PublicKey)}
+	claims := map[string]any{"sub": "user-1", "exp": time.Now().Add(time.Hour).Unix()}
+	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) { coreJSON(w, 200, coreUser("user-1")) })
+	c := srv.client(t)
+
+	for _, tc := range []struct {
+		name string
+		tok  string
+	}{
+		{"alg none", signedJWT(t, "none", "rsa", claims, func([]byte) []byte { return nil })},
+		{"ES256 header with RSA key", signedJWT(t, "ES256", "rsa", claims, signEC)},
+		{"RS256 header with EC key", signedJWT(t, "RS256", "ec", claims, signRSA(rsaKey))},
+		{"PS256 unsupported", signedJWT(t, "PS256", "rsa", claims, signPSS)},
+		{"weak RSA key", signedJWT(t, "RS256", "weak", claims, signRSA(weakKey))},
+		{"RS256 signed by another key", signedJWT(t, "RS256", "rsa", claims, signRSA(weakKey))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := c.GetClaims(ctx, tc.tok, &GetClaimsOptions{Keys: keys}); !errors.Is(err, ErrInvalidJWT) {
+				t.Fatalf("err = %v, want ErrInvalidJWT", err)
+			}
+		})
+	}
+	if n := len(srv.requests()); n != 0 {
+		t.Fatalf("%d requests: a rejected asymmetric token must not fall back to the server", n)
+	}
+	// HS256 is never verified locally with a public key (no HMAC-with-
+	// public-key confusion): it is validated by the server instead.
+	hs := signedJWT(t, "HS256", "rsa", claims, func([]byte) []byte { return []byte("mac") })
+	if _, err := c.GetClaims(ctx, hs, &GetClaimsOptions{Keys: keys}); err != nil {
+		t.Fatal(err)
+	}
+	coreAssertCommon(t, srv.last(t), http.MethodGet, "/auth/v1/user", hs)
+}

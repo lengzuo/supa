@@ -66,6 +66,7 @@ func (c *Client) autoRefreshTick(ctx context.Context) {
 	if busy {
 		return
 	}
+	epoch := c.removalEpoch.Load()
 	s, err := c.loadSession(ctx)
 	if err != nil || s == nil || s.RefreshToken == "" || s.ExpiresAt == 0 {
 		return
@@ -78,7 +79,7 @@ func (c *Client) autoRefreshTick(ctx context.Context) {
 	if expiresInTicks > autoRefreshTickThreshold {
 		return
 	}
-	if _, err := c.callRefreshToken(ctx, s.RefreshToken); err != nil {
+	if _, err := c.callRefreshToken(ctx, s.RefreshToken, epoch); err != nil {
 		c.debug(ctx, "auto refresh tick failed; will retry on the next tick", "error", err.Error())
 	}
 }

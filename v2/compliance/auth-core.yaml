@@ -69,7 +69,7 @@ features:
   auth.sign_in.concurrent_pkce_flows:
     status: implemented
     symbols: [auth.Client.ExchangeCodeForSession, auth.ExchangeCodeOptions, auth.OAuthResponse, auth.PKCEFlowIDParam, auth.Config]
-    tests: [TestConcurrentPKCEFlows]
+    tests: [TestConcurrentPKCEFlows, TestGetSessionFromURLInvalidFlowID]
     reason: ""
 
   auth.session.auto_refresh:
@@ -80,12 +80,12 @@ features:
   auth.session.get_claims:
     status: implemented
     symbols: [auth.Client.GetClaims, auth.GetClaimsOptions, auth.ClaimsResult, auth.JWK, auth.JWKSCacheTTL]
-    tests: [TestGetClaims, TestAMREntryUnmarshal]
+    tests: [TestGetClaims, TestGetClaimsAlgorithmConfusion, TestAMREntryUnmarshal]
     reason: ""
   auth.session.get_session:
     status: implemented
     symbols: [auth.Client.GetSession, auth.ExpiryMargin, auth.ErrRefreshDiscarded]
-    tests: [TestGetSession]
+    tests: [TestGetSession, TestRefreshDiscardedAfterSignOut, TestRefreshFailureCacheOnlyAuthErrors, TestRefreshListenerCanRefresh, TestLoadSessionCorruptEntry]
     reason: ""
   auth.session.get_user:
     status: implemented
@@ -125,13 +125,13 @@ features:
   auth.session.update_user:
     status: implemented
     symbols: [auth.Client.UpdateUser, auth.UpdateUserParams]
-    tests: [TestUpdateUser]
+    tests: [TestUpdateUser, TestUpdateUserConcurrentRefresh, TestUpdateUserConcurrentSignOut, TestUpdateUserDecodeFailureRemovesVerifier]
     reason: ""
 
   auth.identities.link_identity:
     status: implemented
     symbols: [auth.Client.LinkIdentity, auth.Client.LinkIdentityWithIDToken]
-    tests: [TestLinkIdentity]
+    tests: [TestLinkIdentity, TestLinkIdentityConcurrentSignOut]
     reason: ""
   auth.identities.list_identities:
     status: implemented
@@ -191,5 +191,5 @@ features:
   client.authentication_integration.session_url_detection:
     status: implemented
     symbols: [auth.Client.GetSessionFromURL, auth.ErrImplicitGrantRedirect, auth.ErrPKCEGrantCodeExchange]
-    tests: [TestGetSessionFromURL, TestConcurrentPKCEFlows]
+    tests: [TestGetSessionFromURL, TestGetSessionFromURLErrorParams, TestGetSessionFromURLInvalidFlowID, TestConcurrentPKCEFlows]
     reason: ""

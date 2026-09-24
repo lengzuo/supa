@@ -74,7 +74,8 @@ type SIWEMessage struct {
 	Statement string
 	// URI is the resource that is the subject of the signing.
 	URI string
-	// ChainID is the EIP-155 chain id.
+	// ChainID is the EIP-155 chain id. Any integer is accepted, as in
+	// auth-js; 1 is Ethereum mainnet.
 	ChainID int
 	// Nonce is an optional random string (at least 8 characters).
 	Nonce string
@@ -95,8 +96,6 @@ func jsISOString(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:0
 // the user's wallet to sign with personal_sign.
 func CreateSIWEMessage(m SIWEMessage) (string, error) {
 	switch {
-	case m.ChainID <= 0:
-		return "", fmt.Errorf("%w: SIWE chain id must be an EIP-155 chain id", ErrInvalidArgument)
 	case m.Domain == "":
 		return "", fmt.Errorf("%w: SIWE domain must be provided", ErrInvalidArgument)
 	case m.Nonce != "" && len(m.Nonce) < 8:
@@ -152,7 +151,8 @@ func CreateSIWEMessage(m SIWEMessage) (string, error) {
 
 // SolanaSignInMessage describes a Sign-In with Solana message.
 type SolanaSignInMessage struct {
-	// URI is the page the sign-in happens on; Domain defaults to its host.
+	// URI is the absolute URL of the page the sign-in happens on; it is
+	// normalized like JavaScript's URL.href. Domain defaults to its host.
 	URI    string
 	Domain string
 	// Address is the base58 public key of the signing account.
@@ -174,12 +174,20 @@ func CreateSolanaSignInMessage(m SolanaSignInMessage) (string, error) {
 	if m.URI == "" || m.Address == "" {
 		return "", fmt.Errorf("%w: uri and address are required", ErrInvalidArgument)
 	}
+	u, err := url.Parse(m.URI)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("%w: uri must be an absolute URL", ErrInvalidArgument)
+	}
+	// Normalize like JavaScript's new URL(uri).href (e.g. an empty path
+	// becomes "/"), which is what auth-js puts in the message.
+	if u.Path == "" && u.Opaque == "" {
+		u.Path = "/"
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	href := u.String()
 	domain := m.Domain
 	if domain == "" {
-		u, err := url.Parse(m.URI)
-		if err != nil || u.Host == "" {
-			return "", fmt.Errorf("%w: uri must be an absolute URL", ErrInvalidArgument)
-		}
 		domain = u.Host
 	}
 	issuedAt := m.IssuedAt
@@ -192,7 +200,7 @@ func CreateSolanaSignInMessage(m SolanaSignInMessage) (string, error) {
 	} else {
 		lines = append(lines, "")
 	}
-	lines = append(lines, "Version: 1", "URI: "+m.URI, "Issued At: "+jsISOString(issuedAt))
+	lines = append(lines, "Version: 1", "URI: "+href, "Issued At: "+jsISOString(issuedAt))
 	if !m.NotBefore.IsZero() {
 		lines = append(lines, "Not Before: "+jsISOString(m.NotBefore))
 	}

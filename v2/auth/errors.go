@@ -26,6 +26,11 @@ type Error struct {
 	// Retryable reports whether the failure was an infrastructure error
 	// (5xx or network) that may succeed if retried.
 	Retryable bool
+
+	// kind is an additional sentinel code this error matches under
+	// errors.Is (e.g. an error_code from a redirect URL that is also an
+	// ErrImplicitGrantRedirect).
+	kind string
 }
 
 func (e *Error) Error() string {
@@ -45,7 +50,7 @@ func (e *Error) Is(target error) bool {
 	if !ok || t.Code == "" {
 		return false
 	}
-	return e.Code == t.Code
+	return e.Code == t.Code || (e.kind != "" && e.kind == t.Code)
 }
 
 // Frequently checked error codes. The full list is at

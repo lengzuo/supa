@@ -54,7 +54,9 @@ func (c *Client) LinkIdentity(ctx context.Context, accessToken string, params Si
 // LinkIdentityWithIDToken links an OIDC identity to the user with an ID
 // token (POST /token?grant_type=id_token with link_identity). With
 // accessToken == "" the returned session replaces the stored one and
-// USER_UPDATED is emitted.
+// USER_UPDATED is emitted, provided the stored session is still the one
+// the request was made with (a session signed out or rotated meanwhile is
+// left alone).
 func (c *Client) LinkIdentityWithIDToken(ctx context.Context, accessToken string, params SignInWithIDTokenParams) (*AuthResponse, error) {
 	if params.Provider == "" || params.Token == "" {
 		return nil, fmt.Errorf("%w: provider and token are required", ErrInvalidArgument)
@@ -76,7 +78,9 @@ func (c *Client) LinkIdentityWithIDToken(ctx context.Context, accessToken string
 		return nil, ErrInvalidTokenResponse
 	}
 	if session != nil {
-		if err := c.commitSession(ctx, resp.Session, EventUserUpdated); err != nil {
+		// Only replace the stored session if it is still the one the link
+		// was made with; never resurrect one signed out meanwhile.
+		if _, err := c.replaceSessionIfCurrent(ctx, basisOf(session), resp.Session, EventUserUpdated); err != nil {
 			return nil, err
 		}
 	}
