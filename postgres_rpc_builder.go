@@ -43,7 +43,7 @@ func (r *RpcRequestBuilder) Execute(ctx context.Context, result interface{}) err
 		return err
 	}
 	if !isHTTPSuccess(httpResp.StatusCode) {
-		logger.Warn("getting %d in sign in with password due to err: %s", httpResp.StatusCode, httpResp.Body.String())
+		logger.Warn("getting %d in rpc execute with error code %q", httpResp.StatusCode, errorCode(httpResp.Body.Bytes()))
 		var reqError PostgresError
 		if err = json.Unmarshal(httpResp.Body.Bytes(), &reqError); err != nil {
 			return err

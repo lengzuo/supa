@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -35,22 +36,57 @@ var (
 		"error": colorize(levelError, colorRed),
 		"fatal": colorize(levelFatal, colorGreen),
 	}
-	// logger defaults to a disabled logger so that components constructed
-	// directly (NewAuth, NewPostgres, NewStorage) without New never hit a nil
-	// logger. New replaces it according to Config.Debug.
-	logger = buildLogger(false)
+	// logger is the package-wide logger. It starts disabled so that
+	// components constructed directly (NewAuth, NewPostgres, NewStorage)
+	// without New never hit a nil logger; New swaps it according to
+	// Config.Debug. The swap is atomic because New may run concurrently with
+	// in-flight requests that log.
+	logger = newLoggerHolder(buildLogger(false))
 )
+
+// loggerHolder atomically holds the current *zeroLogger.
+type loggerHolder struct {
+	current atomic.Pointer[zeroLogger]
+}
+
+func newLoggerHolder(l *zeroLogger) *loggerHolder {
+	h := &loggerHolder{}
+	h.current.Store(l)
+	return h
+}
+
+func (h *loggerHolder) load() *zeroLogger { return h.current.Load() }
+
+func (h *loggerHolder) store(l *zeroLogger) { h.current.Store(l) }
+
+// Debug logs a debug message on the current logger.
+func (h *loggerHolder) Debug(format string, args ...interface{}) {
+	h.load().Debug(format, args...)
+}
+
+// Warn logs a warning on the current logger.
+func (h *loggerHolder) Warn(format string, args ...interface{}) {
+	h.load().Warn(format, args...)
+}
+
+// Error logs an error on the current logger.
+func (h *loggerHolder) Error(format string, args ...interface{}) {
+	h.load().Error(format, args...)
+}
 
 type zeroLogger struct {
 	zeroLogger zerolog.Logger
 }
 
 func newLogger(debug bool) {
-	logger = buildLogger(debug)
+	logger.store(buildLogger(debug))
 }
 
+// buildLogger returns a fully configured logger. It must not be modified
+// after it has been stored in logger.
 func buildLogger(debug bool) *zeroLogger {
-	l := &zeroLogger{zerolog.New(os.Stdout).With().CallerWithSkipFrameCount(3).Timestamp().Logger()}
+	// Skip frames: zerolog, zeroLogger method, loggerHolder method.
+	l := &zeroLogger{zerolog.New(os.Stdout).With().CallerWithSkipFrameCount(4).Timestamp().Logger()}
 	if debug {
 		l.SetLevel(int8(zerolog.DebugLevel))
 	} else {

@@ -62,54 +62,21 @@ func isHTTPSuccess(statusCode int) bool {
 	return statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices
 }
 
-// sensitiveHeaders are headers whose values must never be logged. Keys are in
-// canonical MIME header form.
-var sensitiveHeaders = map[string]struct{}{
-	"Authorization":       {},
-	"Apikey":              {},
-	"Proxy-Authorization": {},
-	"Cookie":              {},
-	"Set-Cookie":          {},
-	"X-Api-Key":           {},
-}
-
-// sensitiveQueryParams are query parameters (lower-cased) whose values must
-// never be logged.
-var sensitiveQueryParams = map[string]struct{}{
-	"access_token":  {},
-	"refresh_token": {},
-	"id_token":      {},
-	"token":         {},
-	"token_hash":    {},
-	"apikey":        {},
-	"api_key":       {},
-	"password":      {},
-	"code":          {},
-	"code_verifier": {},
-	"nonce":         {},
-	"secret":        {},
-}
-
-// printHeader renders headers for debug logging with the values of
-// credential-bearing headers redacted.
+// printHeader renders only the header names for debug logging. Values are
+// never logged: besides credentials (Authorization, apikey, cookies), custom
+// headers may carry arbitrary user data.
 func printHeader(header http.Header) string {
-	safe := make(map[string][]string, len(header))
-	for k, v := range header {
-		if _, ok := sensitiveHeaders[http.CanonicalHeaderKey(k)]; ok {
-			safe[k] = []string{redacted}
-			continue
-		}
-		safe[k] = v
+	names := make([]string, 0, len(header))
+	for k := range header {
+		names = append(names, k)
 	}
-	headerBytes, err := json.Marshal(safe)
-	if err != nil {
-		return ""
-	}
-	return string(headerBytes)
+	sort.Strings(names)
+	return "[" + strings.Join(names, ",") + "]"
 }
 
-// printURL renders a URL for debug logging with user info and the values of
-// sensitive query parameters redacted.
+// printURL renders a URL for logging with user info, fragment and every query
+// value redacted. Query keys are kept (PostgREST uses column names as keys);
+// values can be tokens or filter data.
 func printURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -119,6 +86,7 @@ func printURL(rawURL string) string {
 	if u.User != nil {
 		u.User = url.User(redacted)
 	}
+	u.Fragment, u.RawFragment = "", ""
 	if u.RawQuery == "" {
 		return u.String()
 	}
@@ -134,16 +102,21 @@ func printURL(rawURL string) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		_, sensitive := sensitiveQueryParams[strings.ToLower(k)]
-		for _, v := range q[k] {
-			if sensitive {
-				v = redacted
-			}
-			parts = append(parts, url.QueryEscape(k)+"="+url.QueryEscape(v))
-		}
+		parts = append(parts, url.QueryEscape(k)+"="+redacted)
 	}
 	u.RawQuery = strings.Join(parts, "&")
 	return u.String()
+}
+
+// redactURLError replaces the URL carried by a *url.Error (as returned by
+// http.NewRequestWithContext and http.Client.Do) with its redacted form,
+// since callers commonly log errors.
+func redactURLError(err error, logURL string) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		urlErr.URL = logURL
+	}
+	return err
 }
 
 func (c requester) Call(ctx context.Context, fullUrl, method string, body any, customHeaders HeaderSetter) (*Resp, error) {
@@ -162,6 +135,7 @@ func (c requester) Call(ctx context.Context, fullUrl, method string, body any, c
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, fullUrl, bytes.NewBuffer(reqBody))
 	if err != nil {
+		err = redactURLError(err, printURL(fullUrl))
 		logger.Error("failed in new request with context with err: %s", err)
 		return nil, err
 	}
@@ -177,6 +151,7 @@ func (c requester) Upload(ctx context.Context, fullUrl, method string, file io.R
 	fileData := bufio.NewReader(file)
 	httpReq, err := http.NewRequestWithContext(ctx, method, fullUrl, fileData)
 	if err != nil {
+		err = redactURLError(err, printURL(fullUrl))
 		logger.Error("failed in new request with context with err: %s", err)
 		return nil, err
 	}
@@ -193,13 +168,7 @@ func (c requester) do(httpReq *http.Request, method, fullUrl string) (*Resp, err
 	logger.Debug("-------> %s %s: header:%s", method, logURL, printHeader(httpReq.Header))
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		// The client wraps transport errors in *url.Error carrying the full
-		// URL; redact it since callers commonly log the error.
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			urlErr.URL = logURL
-		}
-		return nil, err
+		return nil, redactURLError(err, logURL)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
