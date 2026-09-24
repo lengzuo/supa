@@ -36,6 +36,9 @@ func (s *MemoryStorage) GetItem(_ context.Context, key string) (string, error) {
 func (s *MemoryStorage) SetItem(_ context.Context, key, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.m == nil {
+		s.m = map[string]string{}
+	}
 	s.m[key] = value
 	return nil
 }
@@ -103,6 +106,9 @@ func (c *Client) removeSession(ctx context.Context) error {
 func (c *Client) commitSession(ctx context.Context, s *Session, event AuthChangeEvent) error {
 	c.sessionMu.Lock()
 	err := c.saveSession(ctx, s)
+	if err == nil {
+		c.enqueueEvent(event, s)
+	}
 	c.sessionMu.Unlock()
 	if err != nil {
 		return err
@@ -110,20 +116,49 @@ func (c *Client) commitSession(ctx context.Context, s *Session, event AuthChange
 	c.refreshMu.Lock()
 	c.lastRefreshFailure = nil
 	c.refreshMu.Unlock()
-	c.notify(event, s)
+	c.deliverEvents()
 	return nil
 }
 
 // clearSession removes the stored session and notifies SIGNED_OUT.
 func (c *Client) clearSession(ctx context.Context) error {
+	_, err := c.clearSessionIf(ctx, nil)
+	return err
+}
+
+// clearSessionIf removes the stored session and notifies SIGNED_OUT if
+// match (nil = always) accepts the session stored at that moment. The check
+// and the removal happen under sessionMu, so a session committed in the
+// meantime (e.g. a fresh sign-in) is never removed by a stale decision. It
+// reports whether a removal happened.
+func (c *Client) clearSessionIf(ctx context.Context, match func(stored *Session) bool) (bool, error) {
+	removed, err := c.removeSessionIf(ctx, match)
+	if removed {
+		c.deliverEvents()
+	}
+	return removed, err
+}
+
+// removeSessionIf is clearSessionIf without delivering the queued
+// SIGNED_OUT event; the caller must call deliverEvents.
+func (c *Client) removeSessionIf(ctx context.Context, match func(stored *Session) bool) (bool, error) {
 	c.sessionMu.Lock()
+	if match != nil {
+		stored, err := c.loadSession(ctx)
+		if err != nil || stored == nil || !match(stored) {
+			c.sessionMu.Unlock()
+			return false, err
+		}
+	}
 	err := c.removeSession(ctx)
+	if err == nil {
+		c.enqueueEvent(EventSignedOut, nil)
+	}
 	c.sessionMu.Unlock()
 	if err != nil {
-		return err
+		return false, err
 	}
-	c.notify(EventSignedOut, nil)
-	return nil
+	return true, nil
 }
 
 // sessionBasis identifies the stored session a request was made with, so
@@ -169,11 +204,14 @@ func (c *Client) updateStoredUser(ctx context.Context, basis sessionBasis, user 
 	}
 	stored.User = user
 	err = c.saveSession(ctx, stored)
+	if err == nil {
+		c.enqueueEvent(EventUserUpdated, stored)
+	}
 	c.sessionMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	c.notify(EventUserUpdated, stored)
+	c.deliverEvents()
 	return stored, nil
 }
 
@@ -190,6 +228,9 @@ func (c *Client) replaceSessionIfCurrent(ctx context.Context, basis sessionBasis
 		return false, err
 	}
 	err = c.saveSession(ctx, next)
+	if err == nil {
+		c.enqueueEvent(event, next)
+	}
 	c.sessionMu.Unlock()
 	if err != nil {
 		return false, err
@@ -197,6 +238,6 @@ func (c *Client) replaceSessionIfCurrent(ctx context.Context, basis sessionBasis
 	c.refreshMu.Lock()
 	c.lastRefreshFailure = nil
 	c.refreshMu.Unlock()
-	c.notify(event, next)
+	c.deliverEvents()
 	return true, nil
 }

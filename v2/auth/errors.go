@@ -26,6 +26,10 @@ type Error struct {
 	// Retryable reports whether the failure was an infrastructure error
 	// (5xx or network) that may succeed if retried.
 	Retryable bool
+	// RedirectError is the "error" parameter (e.g. "access_denied") of a
+	// redirect URL rejected by GetSessionFromURL; Code then holds its
+	// error_code and Message its error_description.
+	RedirectError string
 
 	// kind is an additional sentinel code this error matches under
 	// errors.Is (e.g. an error_code from a redirect URL that is also an
@@ -110,9 +114,11 @@ func newError(code, msg string) *Error { return &Error{Message: msg, Code: code}
 func invalidJWT(msg string) *Error { return newError(ErrInvalidJWT.Code, msg) }
 
 // isRetryable reports whether err is an infrastructure failure (5xx,
-// network, timeout) after which a stored session must be kept.
+// network, timeout) that may succeed if retried. Failures that happened
+// before the request was sent (a failing RequestEditor or token source)
+// are not retryable: retrying cannot fix them.
 func isRetryable(err error) bool {
-	if err == nil {
+	if err == nil || transport.IsPreSend(err) {
 		return false
 	}
 	var e *Error

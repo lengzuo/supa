@@ -804,13 +804,22 @@ func TestMFAContextCanceled(t *testing.T) {
 
 // upstream: auth-js src/GoTrueClient.ts _verify (concurrent use)
 func TestMFAConcurrentVerify(t *testing.T) {
+	// Hold every verify request until all 8 have arrived, so all of them
+	// were authenticated with the same (original) stored session.
+	const n = 8
+	var arrived atomic.Int32
+	allIn := make(chan struct{})
 	c, _ := mfaNewTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if arrived.Add(1) == n {
+			close(allIn)
+		}
+		<-allIn
 		mfaWriteJSON(w, http.StatusOK, mfaVerifyResponse())
 	})
 	mfaSignIn(t, c, "stored-access-token", nil)
 	ev := mfaSubscribe(c)
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

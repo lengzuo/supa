@@ -185,6 +185,10 @@ func CreateSolanaSignInMessage(m SolanaSignInMessage) (string, error) {
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	u.Host = strings.ToLower(u.Host)
+	// Like URL.host/href, drop the scheme's default port.
+	if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+		u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
+	}
 	href := u.String()
 	domain := m.Domain
 	if domain == "" {

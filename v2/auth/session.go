@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/lengzuo/supa/v2/internal/transport"
 )
 
 // GetSession returns the stored session, or (nil, nil) when there is none.
@@ -34,7 +36,7 @@ func (c *Client) GetSession(ctx context.Context) (*Session, error) {
 	if !c.expiresWithinMargin(s) {
 		return s, nil
 	}
-	refreshed, rerr := c.callRefreshToken(ctx, s.RefreshToken, epoch)
+	refreshed, rerr := c.callRefreshToken(ctx, s.RefreshToken, epoch, true)
 	if rerr == nil {
 		return refreshed, nil
 	}
@@ -43,10 +45,14 @@ func (c *Client) GetSession(ctx context.Context) (*Session, error) {
 	}
 	// Storage is the source of truth after a failed refresh: a proactive
 	// refresh may have failed while the access token is still valid, or a
-	// concurrent writer may have committed its own rotated session.
+	// concurrent writer may have committed its own session.
 	stored, err := c.loadSession(ctx)
 	if err == nil && stored != nil && c.accessTokenValid(stored) {
 		return stored, nil
+	}
+	if err == nil && stored == nil && errors.Is(rerr, ErrRefreshDiscarded) {
+		// Signed out while the refresh was in flight: there is no session.
+		return nil, nil
 	}
 	return nil, rerr
 }
@@ -69,6 +75,9 @@ type refreshCall struct {
 	done    chan struct{}
 	session *Session
 	err     error
+	// next is set when the caller's refresh token was stale (storage
+	// already holds a rotated one that must itself be refreshed).
+	next string
 }
 
 // refreshFailure caches a failed refresh for refreshFailureCooldown.
@@ -81,23 +90,47 @@ type refreshFailure struct {
 // refreshTimeout bounds a detached refresh (including its retries).
 const refreshTimeout = 2 * autoRefreshTickDuration
 
+// maxRefreshHops bounds how often a stale refresh token is swapped for the
+// one currently stored before giving up with ErrRefreshDiscarded.
+const maxRefreshHops = 3
+
 // callRefreshToken refreshes the session identified by refreshToken and
 // commits the result to storage (emitting TOKEN_REFRESHED). Concurrent
 // calls for the same token share one request. The request runs detached
 // from ctx (bounded by refreshTimeout) so that rotated tokens the server
 // already issued are never lost; ctx only bounds how long this caller
-// waits. epoch is c.removalEpoch as read by the caller before it loaded
-// the session: if a sign-out happened since, the result is discarded.
-func (c *Client) callRefreshToken(ctx context.Context, refreshToken string, epoch uint64) (*Session, error) {
+// waits. epoch is c.removalEpoch as read by the caller before it read
+// refreshToken: if a sign-out happened since, the result is discarded.
+//
+// fromStorage marks refreshToken as read from storage without a lock, so it
+// may be stale: before anything is sent, storage is re-read and, if it now
+// holds a different refresh token (someone else already rotated it), the
+// stale token is never sent. The stored session is returned as is when it
+// is outside the expiry margin, otherwise the stored token is refreshed
+// instead. Explicit tokens (fromStorage false) are sent as given.
+func (c *Client) callRefreshToken(ctx context.Context, refreshToken string, epoch uint64, fromStorage bool) (*Session, error) {
+	for hop := 0; ; hop++ {
+		s, next, err := c.callRefreshOnce(ctx, refreshToken, epoch, fromStorage)
+		if next == "" {
+			return s, err
+		}
+		if hop >= maxRefreshHops {
+			return nil, ErrRefreshDiscarded
+		}
+		refreshToken = next
+	}
+}
+
+func (c *Client) callRefreshOnce(ctx context.Context, refreshToken string, epoch uint64, fromStorage bool) (*Session, string, error) {
 	if refreshToken == "" {
-		return nil, ErrSessionMissing
+		return nil, "", ErrSessionMissing
 	}
 	c.refreshMu.Lock()
 	call, inFlight := c.refreshing[refreshToken]
 	if !inFlight {
 		if f := c.lastRefreshFailure; f != nil && f.token == refreshToken && c.now().Before(f.until) {
 			c.refreshMu.Unlock()
-			return nil, f.err
+			return nil, "", f.err
 		}
 		call = &refreshCall{done: make(chan struct{})}
 		c.refreshing[refreshToken] = call
@@ -108,31 +141,28 @@ func (c *Client) callRefreshToken(ctx context.Context, refreshToken string, epoc
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
 		go func() {
 			defer cancel()
-			c.runRefresh(rctx, refreshToken, epoch, call)
+			c.runRefresh(rctx, refreshToken, epoch, fromStorage, call)
 		}()
 	}
 	select {
 	case <-call.done:
-		return call.session, call.err
+		return call.session, call.next, call.err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, "", ctx.Err()
 	}
 }
 
-// runRefresh performs one shared refresh. call.done is closed before
-// listeners are notified, so a listener that itself calls GetSession (or
-// anything that refreshes) does not wait on this call.
-func (c *Client) runRefresh(ctx context.Context, refreshToken string, epoch uint64, call *refreshCall) {
-	var committed *Session
-	defer func() {
-		if committed != nil {
-			c.notify(EventTokenRefreshed, committed)
-		}
-	}()
+// runRefresh performs one shared refresh. When it ends, the in-flight
+// entry is removed first (so a listener that refreshes starts a new call
+// instead of joining this one), then the events it committed are
+// delivered, and only then are the waiting callers released, so a caller
+// returns after its TOKEN_REFRESHED / SIGNED_OUT has reached listeners.
+func (c *Client) runRefresh(ctx context.Context, refreshToken string, epoch uint64, fromStorage bool, call *refreshCall) {
 	defer func() {
 		c.refreshMu.Lock()
 		delete(c.refreshing, refreshToken)
 		c.refreshMu.Unlock()
+		c.deliverEvents()
 		close(call.done)
 	}()
 
@@ -140,10 +170,29 @@ func (c *Client) runRefresh(ctx context.Context, refreshToken string, epoch uint
 	// result if a non-empty snapshot changed under us (a concurrent
 	// sign-in or another refresh), or if any sign-out happened since the
 	// caller read the session (removal epoch).
+	c.sessionMu.Lock()
 	snapshot, err := c.loadSession(ctx)
+	c.sessionMu.Unlock()
 	if err != nil {
 		call.err = err
 		return
+	}
+	if fromStorage {
+		switch {
+		case snapshot == nil:
+			// Signed out since the caller read the token.
+			call.err = ErrRefreshDiscarded
+			return
+		case snapshot.RefreshToken != refreshToken:
+			// The caller's token is stale: it was already rotated. Never
+			// send it (the server would treat it as reuse).
+			if !c.expiresWithinMargin(snapshot) {
+				call.session = snapshot
+				return
+			}
+			call.next = snapshot.RefreshToken
+			return
+		}
 	}
 	resp, err := c.refreshAccessToken(ctx, refreshToken)
 	if err != nil {
@@ -152,9 +201,8 @@ func (c *Client) runRefresh(ctx context.Context, refreshToken string, epoch uint
 		return
 	}
 
-	// Every session removal goes through clearSession, which holds
-	// sessionMu, so checking the epoch and saving under sessionMu is atomic
-	// with respect to sign-out.
+	// Every session removal holds sessionMu, so checking the epoch and
+	// saving under sessionMu is atomic with respect to sign-out.
 	c.sessionMu.Lock()
 	after, err := c.loadSession(ctx)
 	if err != nil {
@@ -169,35 +217,38 @@ func (c *Client) runRefresh(ctx context.Context, refreshToken string, epoch uint
 		call.err = ErrRefreshDiscarded
 		return
 	}
-	err = c.saveSession(ctx, resp)
-	c.sessionMu.Unlock()
-	if err != nil {
+	if err := c.saveSession(ctx, resp); err != nil {
+		c.sessionMu.Unlock()
 		call.err = err
 		return
 	}
+	c.enqueueEvent(EventTokenRefreshed, resp)
+	c.sessionMu.Unlock()
 
 	c.refreshMu.Lock()
 	c.lastRefreshFailure = nil
 	c.refreshMu.Unlock()
 	call.session = resp
-	committed = resp
 }
 
 // handleRefreshFailure applies auth-js semantics: retryable failures keep
-// the session; definitive failures remove it unless the stored access
-// token is still valid (a proactive refresh). Auth failures (*Error) are
-// cached so serial callers within the cooldown do not hammer /token;
-// local failures (storage, decoding, timeouts) are not cached.
+// the session; a definitive auth failure removes the stored session only if
+// it still holds refreshToken and its access token has actually expired
+// (checked and removed atomically under sessionMu, so a session committed
+// meanwhile survives). The SIGNED_OUT event is queued and delivered by
+// runRefresh. Auth failures (*Error) and pre-send failures are cached so
+// serial callers within the cooldown do not retry at once; other local
+// failures (storage, decoding, timeouts) are not cached.
 func (c *Client) handleRefreshFailure(ctx context.Context, refreshToken string, err error) {
 	var ae *Error
-	if !errors.As(err, &ae) {
-		return
+	isAuth := errors.As(err, &ae)
+	if isAuth && !ae.Retryable {
+		_, _ = c.removeSessionIf(ctx, func(stored *Session) bool {
+			return stored.RefreshToken == refreshToken && !c.accessTokenValid(stored)
+		})
 	}
-	if !ae.Retryable {
-		stored, lerr := c.loadSession(ctx)
-		if lerr == nil && (stored == nil || !c.accessTokenValid(stored)) {
-			_ = c.clearSession(ctx)
-		}
+	if !isAuth && !transport.IsPreSend(err) {
+		return
 	}
 	c.refreshMu.Lock()
 	c.lastRefreshFailure = &refreshFailure{token: refreshToken, err: err, until: c.now().Add(refreshFailureCooldown)}
@@ -264,7 +315,7 @@ func (c *Client) RefreshSession(ctx context.Context, refreshToken string) (*Auth
 	if stored == nil {
 		return nil, ErrSessionMissing
 	}
-	s, err := c.callRefreshToken(ctx, stored.RefreshToken, epoch)
+	s, err := c.callRefreshToken(ctx, stored.RefreshToken, epoch, true)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +341,7 @@ func (c *Client) SetSession(ctx context.Context, accessToken, refreshToken strin
 		expiresAt, expired = exp, exp <= now
 	}
 	if expired {
-		s, err := c.callRefreshToken(ctx, refreshToken, epoch)
+		s, err := c.callRefreshToken(ctx, refreshToken, epoch, false)
 		if err != nil {
 			return nil, err
 		}
@@ -399,9 +450,6 @@ func (c *Client) GetUser(ctx context.Context, jwt string) (*User, error) {
 	}
 	s, err := c.GetSession(ctx)
 	if err != nil {
-		if isSessionMissing(err) {
-			_ = c.clearSession(ctx)
-		}
 		return nil, err
 	}
 	token := ""
@@ -411,8 +459,10 @@ func (c *Client) GetUser(ctx context.Context, jwt string) (*User, error) {
 		return nil, ErrSessionMissing
 	}
 	user, err := c.fetchUser(ctx, token)
-	if err != nil && isSessionMissing(err) {
-		_ = c.clearSession(ctx)
+	if err != nil && isSessionMissing(err) && token != "" {
+		// Remove only the session this token belongs to; one committed
+		// meanwhile (e.g. a fresh sign-in) is kept.
+		_, _ = c.clearSessionIf(ctx, func(stored *Session) bool { return stored.AccessToken == token })
 	}
 	return user, err
 }

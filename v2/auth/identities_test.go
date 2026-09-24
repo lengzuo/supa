@@ -191,6 +191,12 @@ func TestCreateSolanaSignInMessage(t *testing.T) {
 	if err != nil || !strings.Contains(msg, "\nURI: https://app.example/\n") || !strings.HasPrefix(msg, "app.example wants") {
 		t.Fatalf("normalized: %q, %v", msg, err)
 	}
+	for _, uri := range []string{"https://app.example:443/login", "http://app.example:80/login"} {
+		msg, err = CreateSolanaSignInMessage(SolanaSignInMessage{URI: uri, Address: "addr", IssuedAt: issued})
+		if err != nil || !strings.HasPrefix(msg, "app.example wants") || strings.Contains(msg, ":443") || strings.Contains(msg, ":80/") {
+			t.Fatalf("default port kept for %s: %q, %v", uri, msg, err)
+		}
+	}
 	if _, err := CreateSolanaSignInMessage(SolanaSignInMessage{URI: "relative", Address: "a"}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("err = %v", err)
 	}

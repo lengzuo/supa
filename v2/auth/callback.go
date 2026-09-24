@@ -48,16 +48,17 @@ func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthRes
 		// ErrImplicitGrantRedirect and carries the URL's error_code.
 		msg := params["error_description"]
 		if msg == "" {
-			msg = params["error"]
-		}
-		if msg == "" {
 			msg = "Error in URL with unspecified error_description"
 		}
 		code := params["error_code"]
 		if code == "" {
 			code = "unspecified_code"
 		}
-		return nil, &Error{Message: msg, Code: code, kind: ErrImplicitGrantRedirect.Code}
+		redirectErr := params["error"]
+		if redirectErr == "" {
+			redirectErr = "unspecified_error"
+		}
+		return nil, &Error{Message: msg, Code: code, RedirectError: redirectErr, kind: ErrImplicitGrantRedirect.Code}
 	}
 
 	switch {
@@ -69,6 +70,11 @@ func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthRes
 	case params["code"] != "":
 		if c.cfg.FlowType != FlowPKCE {
 			return nil, newError(ErrImplicitGrantRedirect.Code, "not a valid implicit grant flow url")
+		}
+		if flowID, ok := params[PKCEFlowIDParam]; ok && validPKCEFlowID(flowID) == "" {
+			// Present but invalid (including empty): fail fast instead of
+			// borrowing another flow's verifier, like auth-js.
+			return nil, ErrPKCEVerifierMissing
 		}
 		return c.ExchangeCodeForSession(ctx, params["code"], &ExchangeCodeOptions{FlowID: params[PKCEFlowIDParam]})
 	default:

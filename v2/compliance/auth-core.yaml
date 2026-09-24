@@ -85,12 +85,12 @@ features:
   auth.session.get_session:
     status: implemented
     symbols: [auth.Client.GetSession, auth.ExpiryMargin, auth.ErrRefreshDiscarded]
-    tests: [TestGetSession, TestRefreshDiscardedAfterSignOut, TestRefreshFailureCacheOnlyAuthErrors, TestRefreshListenerCanRefresh, TestLoadSessionCorruptEntry]
+    tests: [TestGetSession, TestRefreshDiscardedAfterSignOut, TestRefreshFailureCacheOnlyAuthErrors, TestRefreshListenerCanRefresh, TestLoadSessionCorruptEntry, TestRefreshStaleTokenNotSent, TestRefreshStaleTokenRefreshesStored, TestRefreshChaosStrictServer, TestRefreshEventOrder, TestRefreshFailureListenerReentry, TestRefreshFailureKeepsNewerSession, TestRefreshPreSendErrorNotRetried]
     reason: ""
   auth.session.get_user:
     status: implemented
     symbols: [auth.Client.GetUser]
-    tests: [TestGetUser]
+    tests: [TestGetUser, TestGetUserSessionNotFoundKeepsNewerSession]
     reason: ""
   auth.session.refresh_session:
     status: implemented
@@ -173,7 +173,7 @@ features:
   client.session_management.custom_storage:
     status: implemented
     symbols: [auth.SessionStorage, auth.Config]
-    tests: [TestCustomStorage]
+    tests: [TestCustomStorage, TestMemoryStorageZeroValue]
     reason: ""
   client.session_management.persist_session:
     status: implemented

@@ -275,9 +275,11 @@ func TestGetSessionFromURLInvalidFlowID(t *testing.T) {
 	if _, err := c.SignInWithOAuth(ctx, SignInWithOAuthParams{Provider: "github"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := c.GetSessionFromURL(ctx, "https://app/cb?code=abc&"+PKCEFlowIDParam+"=bad!")
-	if !errors.Is(err, ErrPKCEVerifierMissing) {
-		t.Fatalf("err = %v", err)
+	for _, bad := range []string{"bad!", ""} {
+		_, err := c.GetSessionFromURL(ctx, "https://app/cb?code=abc&"+PKCEFlowIDParam+"="+bad)
+		if !errors.Is(err, ErrPKCEVerifierMissing) {
+			t.Fatalf("flow id %q: err = %v", bad, err)
+		}
 	}
 	if srv.count("/auth/v1/token") != 0 {
 		t.Fatal("code exchanged with another flow's verifier")
@@ -293,7 +295,7 @@ func TestGetSessionFromURLErrorParams(t *testing.T) {
 	c := srv.client(t)
 	_, err := c.GetSessionFromURL(context.Background(), "https://app/cb#error=access_denied&error_code=otp_expired")
 	var ae *Error
-	if !errors.As(err, &ae) || ae.Message != "access_denied" || ae.Code != "otp_expired" {
+	if !errors.As(err, &ae) || ae.Message != "Error in URL with unspecified error_description" || ae.Code != "otp_expired" || ae.RedirectError != "access_denied" {
 		t.Fatalf("err = %#v", err)
 	}
 	if !errors.Is(err, ErrImplicitGrantRedirect) || !errors.Is(err, &Error{Code: ErrorCodeOTPExpired}) {
@@ -348,7 +350,7 @@ func TestRefreshListenerCanRefresh(t *testing.T) {
 			once.Do(func() {
 				// The in-flight call for rt-1 is already finished, so this
 				// does not wait on itself.
-				_, err := c.callRefreshToken(ctx, "rt-1", c.removalEpoch.Load())
+				_, err := c.callRefreshToken(ctx, "rt-1", c.removalEpoch.Load(), true)
 				got <- err
 			})
 		}

@@ -116,6 +116,12 @@ type Client struct {
 	listeners   map[uint64]func(AuthChangeEvent, *Session)
 	nextID      uint64
 
+	// evMu guards evQueue and delivering: session events are queued in
+	// commit order (while sessionMu is held) and delivered in that order.
+	evMu       sync.Mutex
+	evQueue    []queuedEvent
+	delivering bool
+
 	// removalEpoch is bumped by removeSession so an in-flight refresh can
 	// detect a concurrent sign-out that happened while it saved.
 	removalEpoch atomic.Uint64
