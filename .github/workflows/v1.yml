@@ -1,0 +1,26 @@
+name: v1 (deprecated)
+
+on:
+  push:
+    branches: [master, main]
+    paths: ["*.go", "go.mod", "go.sum", ".github/workflows/v1.yml"]
+  pull_request:
+    paths: ["*.go", "go.mod", "go.sum", ".github/workflows/v1.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.20.x", "stable"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: test -z "$(gofmt -l *.go)" || (gofmt -l *.go && exit 1)
+      - run: go vet .
+      - run: go test -race -count=1 .
