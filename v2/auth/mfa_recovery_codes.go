@@ -107,10 +107,11 @@ func (r *MFARecoveryCodesAPI) Verify(ctx context.Context, params MFARecoveryCode
 		Code string `json:"code"`
 	}{params.Code}
 	var s Session
-	if err := r.m.mfaDo(ctx, http.MethodPost, "/factors/recovery-codes/verify", body, &s); err != nil {
+	basis, err := r.m.mfaDoBasis(ctx, http.MethodPost, "/factors/recovery-codes/verify", body, &s)
+	if err != nil {
 		return nil, err
 	}
-	if err := r.m.mfaStoreVerified(ctx, &s); err != nil {
+	if err := r.m.mfaStoreVerified(ctx, basis, &s); err != nil {
 		return nil, err
 	}
 	return &s, nil

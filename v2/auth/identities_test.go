@@ -158,10 +158,13 @@ func TestCreateSIWEMessage(t *testing.T) {
 	if msg != want {
 		t.Fatalf("got\n%s\nwant\n%s", msg, want)
 	}
+	// Any integer chain id is accepted, like auth-js Number.isInteger.
+	if msg, err := CreateSIWEMessage(SIWEMessage{Domain: "d", Address: "0xabcdef0123456789abcdef0123456789abcdef01", URI: "u", ChainID: 0, IssuedAt: issued}); err != nil || !strings.Contains(msg, "\nChain ID: 0\n") {
+		t.Fatalf("chain id 0: %q, %v", msg, err)
+	}
 	for _, bad := range []SIWEMessage{
 		{Domain: "d", Address: "0x1", URI: "u", ChainID: 1},
 		{Domain: "d", Address: "0xabcdef0123456789abcdef0123456789abcdef01", URI: "u", ChainID: 1, Nonce: "short"},
-		{Domain: "d", Address: "0xabcdef0123456789abcdef0123456789abcdef01", URI: "u", ChainID: 0},
 		{Domain: "d", Address: "0xabcdef0123456789abcdef0123456789abcdef01", URI: "u", ChainID: 1, Statement: "a\nb"},
 	} {
 		if _, err := CreateSIWEMessage(bad); !errors.Is(err, ErrInvalidArgument) {
@@ -182,6 +185,11 @@ func TestCreateSolanaSignInMessage(t *testing.T) {
 		"Version: 1\nURI: https://app.example:8443/login\nIssued At: 2024-01-02T03:04:05.000Z\nNonce: n1\nResources\n- r1"
 	if msg != want {
 		t.Fatalf("got\n%q\nwant\n%q", msg, want)
+	}
+	// The URI line uses the normalized href, like new URL(uri).href.
+	msg, err = CreateSolanaSignInMessage(SolanaSignInMessage{URI: "HTTPS://App.Example", Address: "addr", IssuedAt: issued})
+	if err != nil || !strings.Contains(msg, "\nURI: https://app.example/\n") || !strings.HasPrefix(msg, "app.example wants") {
+		t.Fatalf("normalized: %q, %v", msg, err)
 	}
 	if _, err := CreateSolanaSignInMessage(SolanaSignInMessage{URI: "relative", Address: "a"}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("err = %v", err)

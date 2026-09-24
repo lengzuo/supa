@@ -59,8 +59,9 @@ func (c *Client) loadSession(ctx context.Context) (*Session, error) {
 	}
 	var s Session
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {
-		// A corrupt entry is treated as no session, like auth-js.
-		_ = c.storage.RemoveItem(ctx, c.storageKey)
+		// A corrupt entry is treated as no session, like auth-js. It is
+		// not deleted here (that would race with a concurrent writer); the
+		// next successful sign-in or sign-out overwrites it.
 		return nil, nil
 	}
 	if s.AccessToken == "" || s.RefreshToken == "" {
@@ -123,4 +124,79 @@ func (c *Client) clearSession(ctx context.Context) error {
 	}
 	c.notify(EventSignedOut, nil)
 	return nil
+}
+
+// sessionBasis identifies the stored session a request was made with, so
+// its result is only written back if that session is still current.
+type sessionBasis struct {
+	accessToken  string
+	refreshToken string
+}
+
+func basisOf(s *Session) sessionBasis {
+	if s == nil {
+		return sessionBasis{}
+	}
+	return sessionBasis{accessToken: s.AccessToken, refreshToken: s.RefreshToken}
+}
+
+// matches reports whether stored is still the session b was taken from.
+func (b sessionBasis) matches(stored *Session) bool {
+	if stored == nil {
+		return false
+	}
+	return (b.refreshToken != "" && stored.RefreshToken == b.refreshToken) ||
+		(b.accessToken != "" && stored.AccessToken == b.accessToken)
+}
+
+// updateStoredUser writes user into the stored session after a user
+// update made with basis, then emits USER_UPDATED with the session actually
+// stored. It never resurrects a session removed in the meantime: when the
+// stored session is gone nothing is written. When the stored session was
+// replaced (e.g. refreshed while the request was in flight) the new user is
+// swapped in only if it belongs to the same user, keeping the stored
+// tokens. It returns the stored session, or nil when nothing was written.
+func (c *Client) updateStoredUser(ctx context.Context, basis sessionBasis, user *User) (*Session, error) {
+	c.sessionMu.Lock()
+	stored, err := c.loadSession(ctx)
+	if err != nil || stored == nil {
+		c.sessionMu.Unlock()
+		return nil, err
+	}
+	if !basis.matches(stored) && (stored.User == nil || user == nil || stored.User.ID != user.ID) {
+		c.sessionMu.Unlock()
+		return nil, nil
+	}
+	stored.User = user
+	err = c.saveSession(ctx, stored)
+	c.sessionMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	c.notify(EventUserUpdated, stored)
+	return stored, nil
+}
+
+// replaceSessionIfCurrent stores next and emits event only if the stored
+// session is still the one identified by basis. A session removed or
+// replaced while the request was in flight is left alone (never
+// resurrected or overwritten with stale tokens). It reports whether next
+// was stored.
+func (c *Client) replaceSessionIfCurrent(ctx context.Context, basis sessionBasis, next *Session, event AuthChangeEvent) (bool, error) {
+	c.sessionMu.Lock()
+	stored, err := c.loadSession(ctx)
+	if err != nil || !basis.matches(stored) {
+		c.sessionMu.Unlock()
+		return false, err
+	}
+	err = c.saveSession(ctx, next)
+	c.sessionMu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	c.refreshMu.Lock()
+	c.lastRefreshFailure = nil
+	c.refreshMu.Unlock()
+	c.notify(event, next)
+	return true, nil
 }

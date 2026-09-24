@@ -258,45 +258,58 @@ type MFAAssuranceLevelResponse struct {
 // mfaAccessToken returns the token to authenticate a call with: the
 // explicit token, or the stored session's access token.
 func (m *MFAAPI) mfaAccessToken(ctx context.Context) (string, error) {
+	token, _, err := m.mfaSession(ctx)
+	return token, err
+}
+
+// mfaSession is mfaAccessToken that also returns the stored session the
+// token came from (nil for an explicit token).
+func (m *MFAAPI) mfaSession(ctx context.Context) (string, *Session, error) {
 	if m.token != "" {
-		return m.token, nil
+		return m.token, nil, nil
 	}
 	s, err := m.c.GetSession(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if s == nil || s.AccessToken == "" {
-		return "", ErrSessionMissing
+		return "", nil, ErrSessionMissing
 	}
-	return s.AccessToken, nil
+	return s.AccessToken, s, nil
 }
 
 // mfaDo performs an authenticated request on behalf of the current user.
 func (m *MFAAPI) mfaDo(ctx context.Context, method, path string, body, out any) error {
-	token, err := m.mfaAccessToken(ctx)
+	_, err := m.mfaDoBasis(ctx, method, path, body, out)
+	return err
+}
+
+// mfaDoBasis is mfaDo that also returns the stored session the request was
+// authenticated with (nil for an explicit token), for mfaStoreVerified.
+func (m *MFAAPI) mfaDoBasis(ctx context.Context, method, path string, body, out any) (*Session, error) {
+	token, basis, err := m.mfaSession(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return m.c.request(ctx, &transport.Request{Method: method, Path: path, Body: body, Token: token}, out)
+	return basis, m.c.request(ctx, &transport.Request{Method: method, Path: path, Body: body, Token: token}, out)
 }
 
 // mfaStoreVerified stores a session returned by an MFA verification and
-// notifies listeners, unless m acts on an explicit access token.
-func (m *MFAAPI) mfaStoreVerified(ctx context.Context, s *Session) error {
-	if m.token != "" {
-		if s.ExpiresAt == 0 && s.ExpiresIn > 0 {
-			s.ExpiresAt = m.c.now().Unix() + s.ExpiresIn
-		}
+// notifies listeners, unless m acts on an explicit access token. The new
+// aal2 session only replaces the stored session if that is still the one
+// the verification was made with (same refresh or access token): a session
+// signed out, or replaced, while the request was in flight is never
+// resurrected or overwritten. The upgraded session is returned to the
+// caller either way.
+func (m *MFAAPI) mfaStoreVerified(ctx context.Context, basis *Session, s *Session) error {
+	if s.ExpiresAt == 0 && s.ExpiresIn > 0 {
+		s.ExpiresAt = m.c.now().Unix() + s.ExpiresIn
+	}
+	if m.token != "" || basis == nil {
 		return nil
 	}
-	m.c.sessionMu.Lock()
-	err := m.c.saveSession(ctx, s)
-	m.c.sessionMu.Unlock()
-	if err != nil {
-		return err
-	}
-	m.c.notify(EventMFAChallengeVerified, s)
-	return nil
+	_, err := m.c.replaceSessionIfCurrent(ctx, basisOf(basis), s, EventMFAChallengeVerified)
+	return err
 }
 
 func mfaRequire(value, name string) error {
@@ -403,10 +416,11 @@ func (m *MFAAPI) Verify(ctx context.Context, params MFAVerifyParams) (*Session, 
 	}
 	var s Session
 	path := "/factors/" + url.PathEscape(params.FactorID) + "/verify"
-	if err := m.mfaDo(ctx, http.MethodPost, path, body, &s); err != nil {
+	basis, err := m.mfaDoBasis(ctx, http.MethodPost, path, body, &s)
+	if err != nil {
 		return nil, err
 	}
-	if err := m.mfaStoreVerified(ctx, &s); err != nil {
+	if err := m.mfaStoreVerified(ctx, basis, &s); err != nil {
 		return nil, err
 	}
 	return &s, nil
