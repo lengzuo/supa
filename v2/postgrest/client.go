@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -107,14 +108,39 @@ func (p RetryPolicy) delay(attempt int) time.Duration {
 	if maxDelay <= 0 {
 		maxDelay = 30 * time.Second
 	}
-	if attempt > 30 {
+	// base << attempt would overflow for large attempts; compare against
+	// maxDelay >> attempt instead (0 once attempt >= 63).
+	if attempt < 0 || attempt >= 63 || base > maxDelay>>attempt {
 		return maxDelay
 	}
-	d := base << attempt
-	if d <= 0 || d > maxDelay {
-		d = maxDelay
+	return base << attempt
+}
+
+// parseRetryAfter returns the Retry-After delay the way postgrest-js
+// computes it: Math.max(0, parseInt(value, 10) || 0) seconds. Only the
+// leading integer is used ("1.5" is 1s); anything unparsable is 0, and
+// absurdly large values are capped rather than overflowing.
+func parseRetryAfter(v string) time.Duration {
+	s := strings.TrimLeft(v, " \t\n\r\v\f")
+	neg := false
+	if s != "" && (s[0] == '+' || s[0] == '-') {
+		neg = s[0] == '-'
+		s = s[1:]
 	}
-	return d
+	const maxSecs = int64(math.MaxInt64 / int64(time.Second))
+	var secs int64
+	for i := 0; i < len(s) && s[i] >= '0' && s[i] <= '9'; i++ {
+		if secs <= maxSecs {
+			secs = secs*10 + int64(s[i]-'0')
+		}
+	}
+	if neg || secs <= 0 {
+		return 0
+	}
+	if secs > maxSecs {
+		secs = maxSecs
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // Client queries a PostgREST API. It is immutable and safe for concurrent
@@ -192,6 +218,9 @@ func (c *Client) SchemaName() string { return c.schema }
 
 // From starts a query on a table or view.
 func (c *Client) From(relation string) QueryBuilder {
+	if c == nil {
+		return QueryBuilder{err: errNoClient}
+	}
 	q := QueryBuilder{c: c, header: c.headers}
 	if strings.TrimSpace(relation) == "" {
 		q.err = errors.New("postgrest: invalid relation name: relation must be a non-empty string")
@@ -226,12 +255,8 @@ func (c *Client) send(ctx context.Context, req *transport.Request, retryEnabled 
 			if attempt >= maxRetries || !isRetryableStatus(resp.StatusCode) {
 				return resp, nil
 			}
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				secs, _ := strconv.Atoi(strings.TrimSpace(ra))
-				if secs < 0 {
-					secs = 0
-				}
-				wait = time.Duration(secs) * time.Second
+			if ra, ok := resp.Header["Retry-After"]; ok && len(ra) > 0 {
+				wait = parseRetryAfter(ra[0])
 			} else {
 				wait = c.retry.delay(attempt)
 			}
