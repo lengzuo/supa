@@ -1,0 +1,36 @@
+features:
+  functions.invocation.invoke:
+    status: implemented
+    symbols: [functions.New, functions.Client.Invoke, functions.InvokeJSON, functions.InvokeOptions, functions.Response, functions.Response.DecodeJSON, functions.Response.Bytes, functions.Response.Text, functions.Response.MediaType, functions.HTTPError, functions.RelayError, functions.FetchError]
+    tests: [TestInvoke, TestInvoke_BodyContentType, TestInvoke_NewAPIKeyNotSentAsBearer, TestInvoke_HTTPError, TestInvoke_RelayError, TestInvoke_FetchError, TestInvoke_FunctionName, TestInvokeJSON, TestResponseHelpers]
+    reason: ""
+  functions.invocation.method_override:
+    status: implemented
+    symbols: [functions.Client.Invoke, functions.InvokeOptions]
+    tests: [TestInvoke_MethodOverride]
+    reason: ""
+  functions.invocation.region_selection:
+    status: implemented
+    symbols: [functions.Client.Invoke, functions.InvokeOptions, functions.Config, functions.Region]
+    tests: [TestInvoke_RegionSelection, TestRegionValues]
+    reason: ""
+  functions.invocation.request_cancellation:
+    status: implemented
+    symbols: [functions.Client.Invoke, functions.FetchError]
+    tests: [TestInvoke_RequestCancellation]
+    reason: ""
+  functions.invocation.set_auth_token:
+    status: implemented
+    symbols: [functions.Client.SetAuth]
+    tests: [TestSetAuth, TestSetAuth_Concurrent]
+    reason: ""
+  functions.invocation.streaming_response:
+    status: implemented
+    symbols: [functions.Client.Invoke, functions.Response]
+    tests: [TestInvoke_StreamingResponse]
+    reason: ""
+  functions.invocation.timeout:
+    status: implemented
+    symbols: [functions.Client.Invoke, functions.InvokeOptions]
+    tests: [TestInvoke_Timeout]
+    reason: ""
