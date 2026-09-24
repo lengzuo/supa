@@ -5,11 +5,13 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -157,16 +159,24 @@ func (c *Client) sub(suffix string) (*transport.Client, error) {
 
 // Error is returned for every failed Storage API call. Use errors.As to
 // inspect it.
+//
+// The field names mirror storage-js StorageApiError: Status is the numeric
+// HTTP status of the response, while StatusCode is the string "statusCode"
+// reported by the Storage server, which is not always an HTTP status (it
+// can be a code such as "NoSuchKey"). Compare Status for HTTP semantics
+// and Code (or IsErrorCode) for the Storage error kind.
 type Error struct {
 	// Message is the human-readable error message.
 	Message string
-	// Status is the HTTP status code.
+	// Status is the HTTP status code of the response, e.g. 404.
 	Status int
-	// StatusCode is the Storage "statusCode" field (a string such as
-	// "404"), or the HTTP status when absent.
+	// StatusCode is the string status reported by Storage. Like
+	// storage-js it is the body's "statusCode" when non-empty, else its
+	// "code", else the HTTP status formatted as a string ("404").
 	StatusCode string
 	// Code is the service-specific code, e.g. "NoSuchKey",
-	// "ResourceAlreadyExists", "AccessDenied".
+	// "ResourceAlreadyExists", "AccessDenied". A numeric "code" in the
+	// body is formatted as a decimal string.
 	Code string
 	// Namespace is "storage" or "vectors".
 	Namespace string
@@ -183,7 +193,24 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s (status %d)", ns, e.Message, e.Status)
 }
 
-// toError converts a transport error into *Error for namespace.
+// jsTruthyString returns v as a string when it is a JSON value that
+// JavaScript treats as truthy and that storage-js would use as a status
+// or code (a non-empty string or a non-zero number).
+func jsTruthyString(v any) (string, bool) {
+	switch x := v.(type) {
+	case string:
+		return x, x != ""
+	case float64:
+		if x == 0 || math.IsNaN(x) {
+			return "", false
+		}
+		return strconv.FormatFloat(x, 'f', -1, 64), true
+	}
+	return "", false
+}
+
+// toError converts a transport error into *Error for namespace, mirroring
+// storage-js handleError and _getErrorMessage.
 func toError(err error, namespace string) error {
 	if err == nil {
 		return nil
@@ -193,14 +220,15 @@ func toError(err error, namespace string) error {
 		return err
 	}
 	out := &Error{Status: he.StatusCode, StatusCode: strconv.Itoa(he.StatusCode), Namespace: namespace}
-	var body map[string]any
-	if json.Unmarshal(he.Body, &body) != nil || body == nil {
+	var parsed any
+	if json.Unmarshal(he.Body, &parsed) != nil {
 		out.Message = http.StatusText(he.StatusCode)
 		if out.Message == "" {
 			out.Message = fmt.Sprintf("HTTP %d error", he.StatusCode)
 		}
 		return out
 	}
+	body, _ := parsed.(map[string]any)
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	switch {
 	case str("msg") != "":
@@ -216,25 +244,25 @@ func toError(err error, namespace string) error {
 			out.Message, _ = nested["message"].(string)
 		}
 		if out.Message == "" {
-			out.Message = string(he.Body)
+			// JSON.stringify(err): arrays, strings, numbers, null and
+			// objects without a message are reported as compact JSON.
+			var buf bytes.Buffer
+			if json.Compact(&buf, he.Body) == nil {
+				out.Message = buf.String()
+			} else {
+				out.Message = string(he.Body)
+			}
 		}
 	}
-	out.Code = str("code")
-	// "statusCode" wins when present and non-empty, then "code", then the
-	// HTTP status (storage-js: err.statusCode || err.code || status).
-	switch v := body["statusCode"].(type) {
-	case string:
-		if v != "" {
-			out.StatusCode = v
-		} else if out.Code != "" {
-			out.StatusCode = out.Code
-		}
-	case float64:
-		out.StatusCode = strconv.Itoa(int(v))
-	default:
-		if out.Code != "" {
-			out.StatusCode = out.Code
-		}
+	code, hasCode := jsTruthyString(body["code"])
+	if hasCode {
+		out.Code = code
+	}
+	// storage-js: err.statusCode || err.code || String(status).
+	if sc, ok := jsTruthyString(body["statusCode"]); ok {
+		out.StatusCode = sc
+	} else if hasCode {
+		out.StatusCode = code
 	}
 	return out
 }

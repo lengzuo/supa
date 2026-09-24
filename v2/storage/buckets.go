@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,16 +65,34 @@ type ListBucketsOptions struct {
 }
 
 // BucketOptions are the settings sent by CreateBucket and UpdateBucket.
+//
+// The zero value of every field means "do not send this setting", so
+// UpdateBucket only changes the settings that are set. To remove a limit
+// that is already configured, use ClearFileSizeLimit or
+// ClearAllowedMIMETypes, which send JSON null as storage-js does for a
+// null option.
 type BucketOptions struct {
-	// Public makes objects readable without authorization. Always sent;
-	// UpdateBucket therefore also sets it.
-	Public bool
+	// Public makes objects readable without authorization. Nil means
+	// "not set": CreateBucket then creates a private bucket (it sends
+	// "public": false, the storage-js default) and UpdateBucket leaves
+	// the bucket's visibility unchanged (the field is omitted).
+	Public *bool
 	// FileSizeLimit is the maximum object size, either a number of bytes
-	// ("1048576") or a size with a unit ("20MB"). Empty leaves it unset.
+	// ("1048576") or a size with a unit ("20MB"). Empty leaves it unset
+	// (not sent).
 	FileSizeLimit string
+	// ClearFileSizeLimit sends "file_size_limit": null, removing the
+	// bucket's own limit so only the global limit applies. It cannot be
+	// combined with a non-empty FileSizeLimit.
+	ClearFileSizeLimit bool
 	// AllowedMIMETypes restricts uploads to these MIME types (wildcards
-	// such as "image/*" are allowed). Nil leaves it unset.
+	// such as "image/*" are allowed). Nil leaves it unset (not sent); a
+	// non-nil empty slice is sent as [].
 	AllowedMIMETypes []string
+	// ClearAllowedMIMETypes sends "allowed_mime_types": null, removing
+	// the restriction so every MIME type is accepted. It cannot be
+	// combined with a non-nil AllowedMIMETypes.
+	ClearAllowedMIMETypes bool
 	// Type is the bucket type (CreateBucket only). Empty means the server
 	// default (STANDARD).
 	Type BucketType
@@ -81,40 +100,80 @@ type BucketOptions struct {
 	VersioningStatus VersioningStatus
 }
 
-// fileSizeLimit is sent as a JSON number for plain byte counts and as a
-// string for values with a unit, matching storage-js (number | string).
-type fileSizeLimit string
-
-func (f fileSizeLimit) MarshalJSON() ([]byte, error) {
-	s := strings.TrimSpace(string(f))
+// fileSizeLimitJSON encodes a limit as a JSON number for plain byte counts
+// and as a string for values with a unit, matching storage-js
+// (number | string).
+func fileSizeLimitJSON(v string) (json.RawMessage, error) {
+	s := strings.TrimSpace(v)
 	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return []byte(strconv.FormatInt(n, 10)), nil
+		return json.RawMessage(strconv.FormatInt(n, 10)), nil
 	}
 	return json.Marshal(s)
 }
 
+var jsonNull = json.RawMessage("null")
+
+// bucketBody is the create/update request body. The RawMessage fields are
+// omitted when empty and otherwise carry a value or a literal null.
 type bucketBody struct {
 	ID               string           `json:"id"`
 	Name             string           `json:"name"`
 	Type             BucketType       `json:"type,omitempty"`
-	Public           bool             `json:"public"`
-	FileSizeLimit    fileSizeLimit    `json:"file_size_limit,omitempty"`
-	AllowedMIMETypes []string         `json:"allowed_mime_types,omitempty"`
+	Public           *bool            `json:"public,omitempty"`
+	FileSizeLimit    json.RawMessage  `json:"file_size_limit,omitempty"`
+	AllowedMIMETypes json.RawMessage  `json:"allowed_mime_types,omitempty"`
 	VersioningStatus VersioningStatus `json:"versioning_status,omitempty"`
 }
 
-func newBucketBody(id string, opts *BucketOptions, withType bool) bucketBody {
+var (
+	errFileSizeLimitConflict = errors.New("storage: FileSizeLimit and ClearFileSizeLimit are mutually exclusive")
+	errMIMETypesConflict     = errors.New("storage: AllowedMIMETypes and ClearAllowedMIMETypes are mutually exclusive")
+)
+
+// newBucketBody builds the request body. create selects CreateBucket
+// semantics: Type is sent and a nil Public is sent as false.
+func newBucketBody(id string, opts *BucketOptions, create bool) (bucketBody, error) {
 	b := bucketBody{ID: id, Name: id}
-	if opts != nil {
-		b.Public = opts.Public
-		b.FileSizeLimit = fileSizeLimit(opts.FileSizeLimit)
-		b.AllowedMIMETypes = opts.AllowedMIMETypes
-		b.VersioningStatus = opts.VersioningStatus
-		if withType {
-			b.Type = opts.Type
-		}
+	if opts == nil {
+		opts = &BucketOptions{}
 	}
-	return b
+	if opts.ClearFileSizeLimit && opts.FileSizeLimit != "" {
+		return b, errFileSizeLimitConflict
+	}
+	if opts.ClearAllowedMIMETypes && opts.AllowedMIMETypes != nil {
+		return b, errMIMETypesConflict
+	}
+	if opts.Public != nil {
+		v := *opts.Public
+		b.Public = &v
+	} else if create {
+		b.Public = new(bool)
+	}
+	switch {
+	case opts.ClearFileSizeLimit:
+		b.FileSizeLimit = jsonNull
+	case opts.FileSizeLimit != "":
+		raw, err := fileSizeLimitJSON(opts.FileSizeLimit)
+		if err != nil {
+			return b, fmt.Errorf("storage: encode file size limit: %w", err)
+		}
+		b.FileSizeLimit = raw
+	}
+	switch {
+	case opts.ClearAllowedMIMETypes:
+		b.AllowedMIMETypes = jsonNull
+	case opts.AllowedMIMETypes != nil:
+		raw, err := json.Marshal(opts.AllowedMIMETypes)
+		if err != nil {
+			return b, fmt.Errorf("storage: encode allowed MIME types: %w", err)
+		}
+		b.AllowedMIMETypes = raw
+	}
+	b.VersioningStatus = opts.VersioningStatus
+	if create {
+		b.Type = opts.Type
+	}
+	return b, nil
 }
 
 type messageResponse struct {
@@ -171,7 +230,7 @@ func (c *Client) GetBucket(ctx context.Context, id string) (*Bucket, error) {
 }
 
 // CreateBucket creates a bucket whose id and name are id, and returns its
-// name. opts may be nil, which creates a private bucket.
+// name. opts may be nil, which creates a private bucket with no limits.
 func (c *Client) CreateBucket(ctx context.Context, id string, opts *BucketOptions) (string, error) {
 	if id == "" {
 		return "", errEmptyBucketID
@@ -179,7 +238,11 @@ func (c *Client) CreateBucket(ctx context.Context, id string, opts *BucketOption
 	var out struct {
 		Name string `json:"name"`
 	}
-	req := &transport.Request{Method: http.MethodPost, Path: "/bucket", Body: newBucketBody(id, opts, true)}
+	body, err := newBucketBody(id, opts, true)
+	if err != nil {
+		return "", err
+	}
+	req := &transport.Request{Method: http.MethodPost, Path: "/bucket", Body: body}
 	if _, err := request(ctx, c.t, req, &out, "storage"); err != nil {
 		return "", err
 	}
@@ -187,12 +250,19 @@ func (c *Client) CreateBucket(ctx context.Context, id string, opts *BucketOption
 }
 
 // UpdateBucket updates a bucket's settings and returns the server message.
-// opts.Type is ignored. opts may be nil, which makes the bucket private.
+// Only the settings set in opts are sent; the others keep their current
+// values. In particular a nil opts.Public leaves the bucket's visibility
+// unchanged (storage-js makes public a required argument and always sends
+// it). opts.Type is ignored. opts may be nil, which sends no settings.
 func (c *Client) UpdateBucket(ctx context.Context, id string, opts *BucketOptions) (string, error) {
 	if id == "" {
 		return "", errEmptyBucketID
 	}
-	return c.message(ctx, http.MethodPut, bucketPath(id, ""), newBucketBody(id, opts, false))
+	body, err := newBucketBody(id, opts, false)
+	if err != nil {
+		return "", err
+	}
+	return c.message(ctx, http.MethodPut, bucketPath(id, ""), body)
 }
 
 // EmptyBucket deletes every object in a bucket (asynchronously on the

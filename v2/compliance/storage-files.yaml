@@ -2,17 +2,17 @@ features:
   storage.configuration.auto_retry:
     status: implemented
     symbols: [storage.Config.Retry, storage.RetryPolicy]
-    tests: [TestRetryPolicy]
+    tests: [TestRetryPolicy, TestUploadNotRetried, TestExistsRetried]
     reason: ""
   storage.errors.error_codes:
     status: implemented
     symbols: [storage.Error.Code, storage.CodeNoSuchKey, storage.CodeNoSuchBucket, storage.CodeResourceAlreadyExists, storage.CodeAccessDenied, storage.IsErrorCode]
-    tests: [TestGetBucketError, TestCreateBucketConflict, TestGetBucketLifecycleError, TestUploadErrors, TestDownloadError, TestIsErrorCodeWrapped, TestDeleteBucketNonJSONError]
+    tests: [TestGetBucketError, TestCreateBucketConflict, TestGetBucketLifecycleError, TestUploadErrors, TestDownloadError, TestIsErrorCodeWrapped, TestDeleteBucketNonJSONError, TestErrorBodyShapes, TestErrorCodeWireValues]
     reason: ""
   storage.file_buckets.access_bucket:
     status: implemented
     symbols: [storage.Client.From, storage.FileAPI.BucketID]
-    tests: [TestUpload, TestConcurrentUse]
+    tests: [TestUpload, TestConcurrentUse, TestFileAPIBucketID]
     reason: ""
   storage.file_buckets.bucket_versioning_status:
     status: implemented
@@ -51,8 +51,8 @@ features:
     reason: ""
   storage.file_buckets.create_file_bucket:
     status: implemented
-    symbols: [storage.Client.CreateBucket, storage.BucketOptions]
-    tests: [TestCreateBucket, TestCreateBucketConflict]
+    symbols: [storage.Client.CreateBucket, storage.BucketOptions, storage.BucketOptions.ClearFileSizeLimit, storage.BucketOptions.ClearAllowedMIMETypes]
+    tests: [TestCreateBucket, TestCreateBucketConflict, TestUpdateBucketClearLimits]
     reason: ""
   storage.file_buckets.create_signed_upload_url:
     status: implemented
@@ -102,7 +102,7 @@ features:
   storage.file_buckets.file_exists:
     status: implemented
     symbols: [storage.FileAPI.Exists]
-    tests: [TestExists]
+    tests: [TestExists, TestExistsRetried]
     reason: ""
   storage.file_buckets.file_info:
     status: implemented
@@ -176,18 +176,18 @@ features:
     reason: ""
   storage.file_buckets.update_bucket:
     status: implemented
-    symbols: [storage.Client.UpdateBucket]
-    tests: [TestUpdateBucket]
+    symbols: [storage.Client.UpdateBucket, storage.BucketOptions.Public, storage.BucketOptions.ClearFileSizeLimit, storage.BucketOptions.ClearAllowedMIMETypes]
+    tests: [TestUpdateBucket, TestUpdateBucketClearLimits, TestUpdateBucketPublicOptional]
     reason: ""
   storage.file_buckets.update_file:
     status: implemented
     symbols: [storage.FileAPI.Update]
-    tests: [TestUpdateFile]
+    tests: [TestUpdateFile, TestUploadClosesBodyOnEveryPath]
     reason: ""
   storage.file_buckets.upload:
     status: implemented
     symbols: [storage.FileAPI.Upload, storage.FileOptions]
-    tests: [TestUpload, TestUploadErrors]
+    tests: [TestUpload, TestUploadErrors, TestUploadClosesBodyOnEveryPath, TestUploadNotRetried]
     reason: ""
   storage.file_buckets.upload_with_metadata:
     status: implemented
@@ -197,7 +197,7 @@ features:
   storage.file_buckets.upload_with_signed_url:
     status: implemented
     symbols: [storage.FileAPI.UploadToSignedURL]
-    tests: [TestUploadToSignedURL]
+    tests: [TestUploadToSignedURL, TestUploadToSignedURLEmptyPath, TestUploadClosesBodyOnEveryPath]
     reason: ""
   storage.file_buckets.url_cache_nonce:
     status: implemented

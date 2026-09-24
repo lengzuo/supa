@@ -6,18 +6,27 @@
 #   honors its own context; a panic becomes an error and never wedges the
 #   catalog). Prefix = overrides.prefix if present, else defaults.prefix
 #   (iceberg-js `??` semantics); an empty prefix falls back to the bucket.
+#   Divergence: an empty or all-slash overrides.prefix never falls through
+#   to defaults.prefix (same as iceberg-js for ""), and "prefix": null in
+#   overrides also selects the bucket (iceberg-js `??` would use
+#   defaults.prefix); an all-slash prefix is treated as empty.
 # - The bucket-name fallback is cached only for an empty/absent prefix or a
 #   400/404/405/501 answer from /v1/config. Auth errors, 429, other 5xx,
 #   network and context errors are returned and retried on the next call
 #   (iceberg-js caches the fallback after any failure).
 # - The server prefix is used verbatim but must be RFC 3986 pchar only;
-#   decoded segments may not contain a "." or ".." component. Unsafe
-#   prefixes fail the call and are not cached.
-# - Bucket names follow the full Storage naming rules (also in CreateBucket
-#   and DeleteBucket). Namespace levels and table names must not be empty,
-#   "." or "..", or contain "/" or "\"; namespace levels also must not
-#   contain 0x1F. Violations return *storage.AnalyticsArgumentError before
-#   any request is sent.
+#   decoded segments must be valid UTF-8 and may not contain a "." or ".."
+#   component, also after cutting the component at its first ';' and
+#   trimming trailing NULs ("..;x", "..%00"). Unsafe prefixes fail the
+#   call and are not cached.
+# - Bucket names follow the full Storage naming rules, and are checked in
+#   CreateBucket and DeleteBucket too (storage-js checks only in from()).
+#   Divergence: "." and ".." are rejected as bucket names although
+#   storage-js and the server accept them, because they would alter the
+#   request path. Namespace levels and table names must not be empty,
+#   "." or "..", or contain "/" or "\", must be valid UTF-8 and at most
+#   1024 bytes; namespace levels also must not contain 0x1F. Violations
+#   return *storage.AnalyticsArgumentError before any request is sent.
 features:
   storage.analytics.create_analytics_bucket:
     status: implemented
@@ -37,7 +46,7 @@ features:
   storage.analytics.access_catalog:
     status: implemented
     symbols: [storage.AnalyticsAPI.From, storage.IcebergCatalog, storage.IcebergCatalog.LoadConfig]
-    tests: [TestAnalyticsFrom, TestIcebergAccessCatalog, TestIcebergPrefixFallback, TestIcebergErrorMapping, TestIcebergContextCanceled, TestIcebergServerPrefix, TestIcebergConfigAuthErrorNotCached, TestIcebergConfigHangHonorsContext, TestIcebergConfigLeaderCanceled, TestAnalyticsRequestURI, TestIcebergServerPrefixValidation, TestIcebergConfigPrefixPrecedence, TestIcebergConfigFallbackCaching, TestIcebergConfigPanicDoesNotWedge]
+    tests: [TestAnalyticsFrom, TestIcebergAccessCatalog, TestIcebergPrefixFallback, TestIcebergErrorMapping, TestIcebergContextCanceled, TestIcebergServerPrefix, TestIcebergConfigAuthErrorNotCached, TestIcebergConfigHangHonorsContext, TestIcebergConfigLeaderCanceled, TestAnalyticsRequestURI, TestIcebergServerPrefixValidation, TestIcebergConfigPrefixPrecedence, TestIcebergConfigFallbackCaching, TestIcebergConfigPanicDoesNotWedge, TestIcebergServerPrefixNormalizedDotSegments, TestIcebergRejectsInvalidNames]
     reason: ""
   storage.analytics.create_namespace:
     status: implemented

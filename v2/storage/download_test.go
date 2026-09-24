@@ -41,13 +41,16 @@ func TestDownloadWithTransform(t *testing.T) {
 	fs := newFake(t, 200, "x")
 	c := newTestClient(t, fs)
 	_, err := c.From("b").Download(context.Background(), "a.png", &DownloadOptions{
-		Transform: &TransformOptions{Width: 200, Height: 100, Resize: ResizeContain, Quality: 60, Format: FormatOrigin},
+		Transform:  &TransformOptions{Width: 200, Height: 100, Resize: ResizeContain, Quality: 60, Format: FormatOrigin},
+		CacheNonce: "n 1",
+		VersionID:  "v/1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Same key order and URLSearchParams encoding as storage-js.
 	assertReq(t, fs.last(t), http.MethodGet, "/storage/v1/render/image/authenticated/b/a.png",
-		"format=origin&height=100&quality=60&resize=contain&width=200")
+		"width=200&height=100&resize=contain&format=origin&quality=60&cacheNonce=n+1&versionId=v%2F1")
 
 	// An empty transform uses the plain object endpoint.
 	if _, err := c.From("b").Download(context.Background(), "a.png", &DownloadOptions{Transform: &TransformOptions{}}); err != nil {

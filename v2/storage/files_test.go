@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // upstream: storage-js src/packages/StorageFileApi.ts upload
@@ -444,4 +445,181 @@ func TestIsErrorCodeWrapped(t *testing.T) {
 	if IsErrorCode(errors.New("x"), CodeAccessDenied) {
 		t.Error("plain error matched")
 	}
+}
+
+// closeCounter is an upload body that records how often it was closed.
+type closeCounter struct {
+	io.Reader
+	mu     sync.Mutex
+	closed int
+}
+
+func (c *closeCounter) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed++
+	return nil
+}
+
+func (c *closeCounter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+// upstream: storage-js src/packages/StorageFileApi.ts uploadOrUpdate /
+// uploadToSignedUrl (Go: an io.Closer body is closed on every path)
+func TestUploadClosesBodyOnEveryPath(t *testing.T) {
+	fs := newFake(t, 200, `{"Id":"id1","Key":"b/a.txt"}`)
+	c := newTestClient(t, fs)
+	tokenErr := newTestClient(t, fs, func(cfg *Config) {
+		cfg.AccessToken = func(context.Context) (string, error) { return "", errors.New("no session") }
+	})
+	editorErr := newTestClient(t, fs, func(cfg *Config) {
+		cfg.RequestEditors = []func(*http.Request) error{func(*http.Request) error { return errors.New("editor") }}
+	})
+	badMeta := &FileOptions{Metadata: map[string]any{"ch": make(chan int)}}
+	var nilCtx context.Context
+	ctx := context.Background()
+
+	type call func(body io.Reader) error
+	upload := func(cl *Client, ctx context.Context, path string, o *FileOptions) call {
+		return func(b io.Reader) error { _, err := cl.From("b").Upload(ctx, path, b, o); return err }
+	}
+	update := func(cl *Client, ctx context.Context, path string, o *FileOptions) call {
+		return func(b io.Reader) error { _, err := cl.From("b").Update(ctx, path, b, o); return err }
+	}
+	signed := func(cl *Client, ctx context.Context, path, token string, o *FileOptions) call {
+		return func(b io.Reader) error { _, err := cl.From("b").UploadToSignedURL(ctx, path, token, b, o); return err }
+	}
+	for _, tt := range []struct {
+		name    string
+		fn      call
+		wantErr bool
+	}{
+		{"upload ok", upload(c, ctx, "a.txt", nil), false},
+		{"upload empty path", upload(c, ctx, "/", nil), true},
+		{"upload bad metadata", upload(c, ctx, "a.txt", badMeta), true},
+		{"upload token error", upload(tokenErr, ctx, "a.txt", nil), true},
+		{"upload editor error", upload(editorErr, ctx, "a.txt", nil), true},
+		{"upload nil context", upload(c, nilCtx, "a.txt", nil), true},
+		{"update ok", update(c, ctx, "a.txt", nil), false},
+		{"update empty path", update(c, ctx, "//", nil), true},
+		{"update bad metadata", update(c, ctx, "a.txt", badMeta), true},
+		{"update editor error", update(editorErr, ctx, "a.txt", nil), true},
+		{"signed ok", signed(c, ctx, "a.txt", "tok", nil), false},
+		{"signed empty token", signed(c, ctx, "a.txt", "", nil), true},
+		{"signed empty path", signed(c, ctx, "/", "tok", nil), true},
+		{"signed bad metadata", signed(c, ctx, "a.txt", "tok", badMeta), true},
+		{"signed editor error", signed(editorErr, ctx, "a.txt", "tok", nil), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &closeCounter{Reader: strings.NewReader("data")}
+			err := tt.fn(body)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			// net/http may close the body from its write goroutine
+			// shortly after Do returns.
+			deadline := time.Now().Add(2 * time.Second)
+			for body.count() == 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if n := body.count(); n != 1 {
+				t.Errorf("body closed %d times, want 1", n)
+			}
+		})
+	}
+}
+
+// upstream: storage-js src/packages/StorageFileApi.ts uploadToSignedUrl
+// (Go: an empty path is rejected before any request, as in Upload)
+func TestUploadToSignedURLEmptyPath(t *testing.T) {
+	fs := newFake(t, 200, `{"Key":"b/a.txt"}`)
+	c := newTestClient(t, fs)
+	for _, p := range []string{"", "/", "//"} {
+		_, err := c.From("b").UploadToSignedURL(context.Background(), p, "tok", strings.NewReader("x"), nil)
+		if !errors.Is(err, errEmptyPath) {
+			t.Errorf("path %q: err = %v, want errEmptyPath", p, err)
+		}
+	}
+	if fs.count() != 0 {
+		t.Errorf("sent %d requests", fs.count())
+	}
+}
+
+// upstream: storage-js src/packages/StorageFileApi.ts (bucketId field)
+func TestFileAPIBucketID(t *testing.T) {
+	c, err := New(Config{URL: "http://localhost/storage/v1", APIKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.From("my bucket").BucketID(); got != "my bucket" {
+		t.Errorf("BucketID = %q", got)
+	}
+}
+
+// upstream: storage-js src/lib/common/fetch.ts (retries; streamed bodies
+// cannot be replayed, so uploads are sent once)
+func TestUploadNotRetried(t *testing.T) {
+	fs := newFake(t, http.StatusServiceUnavailable, `{"message":"busy"}`)
+	c := newTestClient(t, fs, func(cfg *Config) {
+		cfg.Retry = &RetryPolicy{
+			MaxAttempts: 4, BaseDelay: 1, MaxDelay: 2,
+			Methods: []string{http.MethodPost, http.MethodPut},
+		}
+	})
+	f := c.From("b")
+	calls := []func() error{
+		func() error {
+			_, err := f.Upload(context.Background(), "a.txt", strings.NewReader("x"), nil)
+			return err
+		},
+		func() error {
+			_, err := f.Update(context.Background(), "a.txt", strings.NewReader("x"), nil)
+			return err
+		},
+		func() error {
+			_, err := f.UploadToSignedURL(context.Background(), "a.txt", "tok", strings.NewReader("x"), nil)
+			return err
+		},
+	}
+	for i, call := range calls {
+		before := fs.count()
+		if err := call(); err == nil {
+			t.Fatalf("call %d: expected error", i)
+		}
+		if n := fs.count() - before; n != 1 {
+			t.Errorf("call %d: attempts = %d, want 1", i, n)
+		}
+	}
+}
+
+// upstream: storage-js src/packages/StorageFileApi.ts exists (HEAD is
+// retried under the default retry methods)
+func TestExistsRetried(t *testing.T) {
+	var mu sync.Mutex
+	n := 0
+	fs := newFakeHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		n++
+		cur := n
+		mu.Unlock()
+		if cur < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	c := newTestClient(t, fs, func(cfg *Config) {
+		cfg.Retry = &RetryPolicy{MaxAttempts: 3, BaseDelay: 1, MaxDelay: 2}
+	})
+	ok, err := c.From("b").Exists(context.Background(), "a.txt")
+	if err != nil || !ok {
+		t.Fatalf("Exists = %v, %v", ok, err)
+	}
+	if fs.count() != 3 {
+		t.Errorf("attempts = %d, want 3", fs.count())
+	}
+	assertReq(t, fs.last(t), http.MethodHead, "/storage/v1/object/b/a.txt", "")
 }

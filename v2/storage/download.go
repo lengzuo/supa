@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 
 	"github.com/lengzuo/supa/v2/internal/transport"
 )
@@ -26,24 +25,27 @@ type DownloadOptions struct {
 // including while the body is being read. opts may be nil.
 func (f *FileAPI) DownloadStream(ctx context.Context, path string, opts *DownloadOptions) (io.ReadCloser, error) {
 	render := "object"
-	q := url.Values{}
+	// The query is built in storage-js order (width, height, resize,
+	// format, quality, cacheNonce, versionId) and passed in the path,
+	// which the transport keeps verbatim (url.Values would sort it).
+	var q formQuery
 	if opts != nil {
 		if opts.Transform.isSet() {
 			render = "render/image/authenticated"
 		}
-		var fq formQuery
-		opts.Transform.applyTo(&fq)
-		for i, k := range fq.keys {
-			q.Set(k, fq.values[i])
-		}
+		opts.Transform.applyTo(&q)
 		if opts.CacheNonce != "" {
-			q.Set("cacheNonce", opts.CacheNonce)
+			q.set("cacheNonce", opts.CacheNonce)
 		}
 		if opts.VersionID != "" {
-			q.Set("versionId", opts.VersionID)
+			q.set("versionId", opts.VersionID)
 		}
 	}
-	req := &transport.Request{Method: http.MethodGet, Path: "/" + render + "/" + f.finalPath(path), Query: q}
+	p := "/" + render + "/" + f.finalPath(path)
+	if qs := q.encode(); qs != "" {
+		p += "?" + qs
+	}
+	req := &transport.Request{Method: http.MethodGet, Path: p}
 	resp, err := f.c.t.Do(ctx, req)
 	if err != nil {
 		return nil, err

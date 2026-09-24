@@ -73,7 +73,7 @@ func TestCreateBucket(t *testing.T) {
 	fs := newFake(t, 200, `{"name":"avatars"}`)
 	c := newTestClient(t, fs)
 	name, err := c.CreateBucket(context.Background(), "avatars", &BucketOptions{
-		Public: true, FileSizeLimit: "1024", AllowedMIMETypes: []string{"image/*"},
+		Public: boolPtr(true), FileSizeLimit: "1024", AllowedMIMETypes: []string{"image/*"},
 		Type: BucketTypeStandard, VersioningStatus: VersioningEnabled,
 	})
 	if err != nil || name != "avatars" {
@@ -108,7 +108,7 @@ func TestUpdateBucket(t *testing.T) {
 	fs := newFake(t, 200, `{"message":"Successfully updated"}`)
 	c := newTestClient(t, fs)
 	msg, err := c.UpdateBucket(context.Background(), "avatars", &BucketOptions{
-		Public: true, FileSizeLimit: "2048", VersioningStatus: VersioningSuspended, Type: BucketTypeAnalytics,
+		Public: boolPtr(true), FileSizeLimit: "2048", VersioningStatus: VersioningSuspended, Type: BucketTypeAnalytics,
 	})
 	if err != nil || msg != "Successfully updated" {
 		t.Fatalf("msg=%q err=%v", msg, err)
@@ -116,6 +116,75 @@ func TestUpdateBucket(t *testing.T) {
 	r := fs.last(t)
 	assertReq(t, r, http.MethodPut, "/storage/v1/bucket/avatars", "")
 	assertJSONBody(t, r, `{"id":"avatars","name":"avatars","public":true,"file_size_limit":2048,"versioning_status":"SUSPENDED"}`)
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+// upstream: storage-js src/packages/StorageBucketApi.ts updateBucket
+// (fileSizeLimit/allowedMimeTypes: null clears the setting)
+func TestUpdateBucketClearLimits(t *testing.T) {
+	fs := newFake(t, 200, `{"message":"Successfully updated"}`)
+	c := newTestClient(t, fs)
+	ctx := context.Background()
+
+	if _, err := c.UpdateBucket(ctx, "avatars", &BucketOptions{
+		ClearFileSizeLimit: true, ClearAllowedMIMETypes: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONBody(t, fs.last(t), `{"id":"avatars","name":"avatars","file_size_limit":null,"allowed_mime_types":null}`)
+
+	// A non-nil empty slice is sent as [] (not dropped).
+	if _, err := c.UpdateBucket(ctx, "avatars", &BucketOptions{AllowedMIMETypes: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONBody(t, fs.last(t), `{"id":"avatars","name":"avatars","allowed_mime_types":[]}`)
+
+	// Clearing also works on create.
+	if _, err := c.CreateBucket(ctx, "b", &BucketOptions{ClearFileSizeLimit: true}); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONBody(t, fs.last(t), `{"id":"b","name":"b","public":false,"file_size_limit":null}`)
+
+	// Conflicting value and Clear flag fail before any request.
+	before := fs.count()
+	for _, o := range []*BucketOptions{
+		{FileSizeLimit: "1", ClearFileSizeLimit: true},
+		{AllowedMIMETypes: []string{}, ClearAllowedMIMETypes: true},
+	} {
+		if _, err := c.UpdateBucket(ctx, "avatars", o); err == nil {
+			t.Errorf("UpdateBucket(%+v): expected error", o)
+		}
+		if _, err := c.CreateBucket(ctx, "avatars", o); err == nil {
+			t.Errorf("CreateBucket(%+v): expected error", o)
+		}
+	}
+	if fs.count() != before {
+		t.Errorf("sent %d requests for invalid options", fs.count()-before)
+	}
+}
+
+// upstream: storage-js src/packages/StorageBucketApi.ts updateBucket
+// (Go divergence: an unset Public is omitted, so visibility is unchanged)
+func TestUpdateBucketPublicOptional(t *testing.T) {
+	fs := newFake(t, 200, `{"message":"Successfully updated"}`)
+	c := newTestClient(t, fs)
+	ctx := context.Background()
+
+	if _, err := c.UpdateBucket(ctx, "avatars", nil); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONBody(t, fs.last(t), `{"id":"avatars","name":"avatars"}`)
+
+	if _, err := c.UpdateBucket(ctx, "avatars", &BucketOptions{FileSizeLimit: "20MB"}); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONBody(t, fs.last(t), `{"id":"avatars","name":"avatars","file_size_limit":"20MB"}`)
+
+	if _, err := c.UpdateBucket(ctx, "avatars", &BucketOptions{Public: boolPtr(false)}); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONBody(t, fs.last(t), `{"id":"avatars","name":"avatars","public":false}`)
 }
 
 // upstream: storage-js src/packages/StorageBucketApi.ts emptyBucket
@@ -295,5 +364,65 @@ func TestRequestUsesAccessToken(t *testing.T) {
 	}
 	if a := fs.last(t).Header.Get("Authorization"); a != "Bearer user-jwt" {
 		t.Errorf("Authorization = %q", a)
+	}
+}
+
+// upstream: storage-js src/lib/common/fetch.ts handleError / _getErrorMessage
+// (statusCode = err.statusCode || err.code || String(status); message
+// falls back to JSON.stringify(err))
+func TestErrorBodyShapes(t *testing.T) {
+	for _, tt := range []struct {
+		name                  string
+		status                int
+		body                  string
+		msg, statusCode, code string
+	}{
+		{"statusCode wins", 404, `{"statusCode":"409","code":"NoSuchKey","message":"m"}`, "m", "409", "NoSuchKey"},
+		{"empty statusCode falls back to code", 404, `{"statusCode":"","code":"NoSuchKey","message":"m"}`, "m", "NoSuchKey", "NoSuchKey"},
+		{"empty statusCode and code fall back to status", 404, `{"statusCode":"","code":"","message":"m"}`, "m", "404", ""},
+		{"zero statusCode is falsy", 404, `{"statusCode":0,"message":"m"}`, "m", "404", ""},
+		{"numeric statusCode", 400, `{"statusCode":413,"message":"m"}`, "m", "413", ""},
+		{"numeric code", 400, `{"code":42,"message":"m"}`, "m", "42", "42"},
+		{"zero code is falsy", 400, `{"code":0,"message":"m"}`, "m", "400", ""},
+		{"array body", 500, `[1, "a"]`, `[1,"a"]`, "500", ""},
+		{"string body", 500, `"boom"`, `"boom"`, "500", ""},
+		{"null body", 500, `null`, `null`, "500", ""},
+		{"object without message", 500, `{"b": 1, "a": 2}`, `{"b":1,"a":2}`, "500", ""},
+		{"nested error message", 500, `{"error":{"message":"deep"}}`, "deep", "500", ""},
+		{"non-JSON body", 502, `<html>`, "Bad Gateway", "502", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := newFake(t, tt.status, tt.body)
+			c := newTestClient(t, fs)
+			_, err := c.GetBucket(context.Background(), "b")
+			var e *Error
+			if !errors.As(err, &e) {
+				t.Fatalf("err = %T %v", err, err)
+			}
+			if e.Status != tt.status || e.Message != tt.msg || e.StatusCode != tt.statusCode || e.Code != tt.code {
+				t.Errorf("got status=%d msg=%q statusCode=%q code=%q, want %d %q %q %q",
+					e.Status, e.Message, e.StatusCode, e.Code, tt.status, tt.msg, tt.statusCode, tt.code)
+			}
+		})
+	}
+}
+
+// Wire values of the Code* constants that differ from their Go names, as
+// defined by the Storage server ErrorCode enum (src/internal/errors/codes.ts).
+func TestErrorCodeWireValues(t *testing.T) {
+	for got, want := range map[string]string{
+		CodeS3InvalidAccessKeyID:      "InvalidAccessKeyId",
+		CodeS3MaximumCredentialsLimit: "MaximumCredentialsLimit",
+		CodeInvalidUploadID:           "InvalidUploadId",
+	} {
+		if got != want {
+			t.Errorf("code = %q, want %q", got, want)
+		}
+	}
+	fs := newFake(t, 403, `{"statusCode":"403","error":"Forbidden","message":"bad key","code":"InvalidAccessKeyId"}`)
+	c := newTestClient(t, fs)
+	_, err := c.GetBucket(context.Background(), "b")
+	if !IsErrorCode(err, CodeS3InvalidAccessKeyID) {
+		t.Errorf("IsErrorCode(%v, CodeS3InvalidAccessKeyID) = false", err)
 	}
 }

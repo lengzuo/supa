@@ -380,6 +380,9 @@ func TestIcebergConfigPrefixPrecedence(t *testing.T) {
 		{`{"defaults":{"prefix":"d"},"overrides":{}}`, "/storage/v1/iceberg/v1/d/namespaces"},
 		{`{"defaults":{"prefix":"d"},"overrides":{"prefix":"o"}}`, "/storage/v1/iceberg/v1/o/namespaces"},
 		{`{"defaults":{},"overrides":{"prefix":"/"}}`, "/storage/v1/iceberg/v1/bkt/namespaces"},
+		// Documented divergence: null is present-but-empty, so the bucket
+		// is used (iceberg-js `??` would pick defaults.prefix).
+		{`{"defaults":{"prefix":"d"},"overrides":{"prefix":null}}`, "/storage/v1/iceberg/v1/bkt/namespaces"},
 	} {
 		c, reqs := analyticsTestServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
 			if r.URL.Path == "/storage/v1/iceberg/v1/config" {
@@ -495,5 +498,68 @@ func TestIcebergServerPrefixValidation(t *testing.T) {
 		if got, err := icebergServerPrefix(in); err != nil || got != want {
 			t.Errorf("icebergServerPrefix(%q) = %q, %v; want %q", in, got, err, want)
 		}
+	}
+}
+
+// A server prefix component that some servers or proxies normalize to a
+// dot-segment ("..;x" path parameters, trailing NULs) or that decodes to
+// invalid UTF-8 is rejected.
+func TestIcebergServerPrefixNormalizedDotSegments(t *testing.T) {
+	for _, bad := range []string{
+		"..;x", "a/..;jsessionid=1", ".;", "%2E%2E%3Bx", "a%2F..%3Bx", "..%00", ".%00%00", "a%2F..%00%3Bx",
+		"%FF", "a%C3", "ok/%C0%AF",
+	} {
+		if got, err := icebergServerPrefix(bad); err == nil {
+			t.Errorf("icebergServerPrefix(%q) = %q, want error", bad, got)
+		}
+	}
+	for _, good := range []string{"x;y", "...;x", "a;..", ";x", "a%00b", "caf%C3%A9"} {
+		if got, err := icebergServerPrefix(good); err != nil || got != good {
+			t.Errorf("icebergServerPrefix(%q) = %q, %v; want it unchanged", good, got, err)
+		}
+	}
+}
+
+// Namespace levels and table names must be valid UTF-8 and at most
+// icebergMaxNameBytes long; violations fail before any request.
+func TestIcebergRejectsInvalidNames(t *testing.T) {
+	c, reqs := analyticsTestServer(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		analyticsWriteJSON(w, 200, `{}`)
+	})
+	cat, err := c.Analytics().From("my-bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	long := strings.Repeat("a", icebergMaxNameBytes+1)
+	for name, call := range map[string]func() error{
+		"table name invalid UTF-8": func() error {
+			return cat.DropTable(ctx, IcebergTableIdentifier{Namespace: []string{"ns"}, Name: "t\xff"}, nil)
+		},
+		"namespace invalid UTF-8": func() error { return cat.DropNamespace(ctx, []string{"a\xc3"}) },
+		"table name too long": func() error {
+			return cat.DropTable(ctx, IcebergTableIdentifier{Namespace: []string{"ns"}, Name: long}, nil)
+		},
+		"namespace too long": func() error { return cat.DropNamespace(ctx, []string{"ok", long}) },
+		"create table too long": func() error {
+			_, err := cat.CreateTable(ctx, []string{"ns"}, IcebergCreateTableRequest{Name: long})
+			return err
+		},
+	} {
+		var ae *AnalyticsArgumentError
+		if err := call(); !errors.As(err, &ae) {
+			t.Errorf("%s: err = %v, want *AnalyticsArgumentError", name, err)
+		}
+	}
+	if n := len(reqs()); n != 0 {
+		t.Errorf("sent %d requests for invalid arguments", n)
+	}
+
+	// Exactly the limit, and multi-byte UTF-8, are accepted.
+	if err := icebergCheckSegment("table name", strings.Repeat("a", icebergMaxNameBytes)); err != nil {
+		t.Errorf("name at limit: %v", err)
+	}
+	if err := icebergCheckSegment("table name", "café"); err != nil {
+		t.Errorf("UTF-8 name: %v", err)
 	}
 }

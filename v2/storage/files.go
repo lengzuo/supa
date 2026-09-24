@@ -73,8 +73,9 @@ type objectKeyResponse struct {
 }
 
 var (
-	errNilBody   = errors.New("storage: upload body is nil")
-	errEmptyPath = errors.New("storage: object path is required")
+	errNilBody          = errors.New("storage: upload body is nil")
+	errEmptyPath        = errors.New("storage: object path is required")
+	errEmptyUploadToken = errors.New("storage: signed upload token is required")
 )
 
 // finalPath returns the escaped "<bucket>/<path>" used in object URLs.
@@ -130,8 +131,10 @@ func encodeJSON(v any) ([]byte, error) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
-// Upload stores body at path. The body is streamed, not buffered; it is
-// closed if it implements io.Closer (as with net/http). The upload fails
+// Upload stores body at path. The body is streamed, not buffered. If it
+// implements io.Closer it is always closed, including when the call fails
+// before anything is sent (invalid arguments, metadata encoding, access
+// token or request editor failures). The upload fails
 // with CodeResourceAlreadyExists (HTTP 409) when the object exists and
 // opts.Upsert is false. opts may be nil.
 //
@@ -151,18 +154,48 @@ func (f *FileAPI) uploadOrUpdate(ctx context.Context, method, path string, body 
 	}
 	h, err := uploadHeaders(opts, method == http.MethodPost)
 	if err != nil {
+		closeBody(body)
 		return nil, err
 	}
 	clean := removeEmptyFolders(path)
 	if clean == "" {
+		closeBody(body)
 		return nil, errEmptyPath
 	}
 	var out objectKeyResponse
 	req := &transport.Request{Method: method, Path: "/object/" + f.finalPath(clean), Header: h, Body: body, NoRetry: true}
-	if _, err := request(ctx, f.c.t, req, &out, "storage"); err != nil {
+	if err := f.sendUpload(ctx, req, body, &out); err != nil {
 		return nil, err
 	}
 	return &UploadResponse{ID: out.ID, Path: clean, FullPath: out.Key}, nil
+}
+
+// closeBody closes body if it is an io.Closer. It is used on paths where
+// the body never reaches net/http, which would otherwise close it.
+func closeBody(body io.Reader) {
+	if c, ok := body.(io.Closer); ok {
+		_ = c.Close()
+	}
+}
+
+// sendUpload sends a streamed upload. Once the request reaches
+// http.Client.Do, net/http closes the body (also on error); every failure
+// before that point closes it here, so the body is closed exactly once on
+// every path.
+func (f *FileAPI) sendUpload(ctx context.Context, req *transport.Request, body io.Reader, out any) error {
+	if ctx == nil {
+		closeBody(body)
+		return errors.New("storage: nil context")
+	}
+	if _, err := f.c.t.URL(req.Path, req.Query); err != nil {
+		closeBody(body)
+		return err
+	}
+	_, err := request(ctx, f.c.t, req, out, "storage")
+	if err != nil && transport.IsPreSend(err) {
+		closeBody(body)
+	}
+	return err
 }
 
 // SignedUploadURLOptions configures CreateSignedUploadURL.
@@ -215,13 +248,19 @@ func (f *FileAPI) UploadToSignedURL(ctx context.Context, path, token string, bod
 		return nil, errNilBody
 	}
 	if token == "" {
-		return nil, errors.New("storage: signed upload token is required")
+		closeBody(body)
+		return nil, errEmptyUploadToken
 	}
 	h, err := uploadHeaders(opts, true)
 	if err != nil {
+		closeBody(body)
 		return nil, err
 	}
 	clean := removeEmptyFolders(path)
+	if clean == "" {
+		closeBody(body)
+		return nil, errEmptyPath
+	}
 	var out objectKeyResponse
 	req := &transport.Request{
 		Method:  http.MethodPut,
@@ -231,7 +270,7 @@ func (f *FileAPI) UploadToSignedURL(ctx context.Context, path, token string, bod
 		Body:    body,
 		NoRetry: true,
 	}
-	if _, err := request(ctx, f.c.t, req, &out, "storage"); err != nil {
+	if err := f.sendUpload(ctx, req, body, &out); err != nil {
 		return nil, err
 	}
 	return &UploadResponse{Path: clean, FullPath: out.Key}, nil

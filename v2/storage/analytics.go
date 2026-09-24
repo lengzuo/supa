@@ -86,6 +86,13 @@ type AnalyticsMessageResponse struct {
 }
 
 // CreateBucket creates an analytics bucket named name.
+//
+// name is checked against the same rules as From before any request is
+// sent, and an invalid name fails with *AnalyticsArgumentError. This
+// diverges from storage-js, which validates names only in from(): in
+// particular "." and "..", which storage-js and the Storage server accept
+// as bucket names, are rejected here because they would alter the
+// request path. DeleteBucket applies the same check.
 func (a *AnalyticsAPI) CreateBucket(ctx context.Context, name string) (*AnalyticsBucket, error) {
 	if a.err != nil {
 		return nil, a.err
@@ -141,6 +148,7 @@ func (a *AnalyticsAPI) ListBuckets(ctx context.Context, opts *AnalyticsListBucke
 }
 
 // DeleteBucket deletes the analytics bucket name. The bucket must be empty.
+// name is validated as in CreateBucket.
 func (a *AnalyticsAPI) DeleteBucket(ctx context.Context, name string) (*AnalyticsMessageResponse, error) {
 	if a.err != nil {
 		return nil, a.err

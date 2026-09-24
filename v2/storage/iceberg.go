@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lengzuo/supa/v2/internal/transport"
 )
@@ -39,7 +40,15 @@ import (
 //     sub-delims, ':', '@' and valid %XX escapes); no segment may be empty,
 //     and no '/'- or '\'-separated component of a decoded segment may be
 //     "." or ".." (encoded separators such as "a%2Fb" are allowed and stay
-//     encoded on the wire). Otherwise the call fails and nothing is cached.
+//     encoded on the wire), also after cutting the component at its first
+//     ';' and trimming trailing NULs ("..;x", "..%00"); decoded segments
+//     must be valid UTF-8. Otherwise the call fails and nothing is cached.
+//   - An overrides.prefix that is present but empty (or only slashes)
+//     does not fall through to defaults.prefix; the bucket name is used,
+//     as in iceberg-js for "". Divergence: overrides.prefix = null decodes
+//     to "" here and also selects the bucket name, where iceberg-js's `??`
+//     would use defaults.prefix; a prefix of only slashes is treated as
+//     empty, where iceberg-js would build "v1//...".
 //   - It falls back to the bucket name, and caches that fallback, when the
 //     prefix is empty or absent or /v1/config answers 400, 404, 405 or 501
 //     (the server has no usable config endpoint). Any other failure (auth
@@ -47,10 +56,11 @@ import (
 //     editor) is returned and not cached, so the next call retries.
 //     (iceberg-js caches the fallback after any failure.)
 //   - Namespace levels, table names and the bucket name must not be
-//     empty, "." or "..", nor contain '/' or '\'; namespace levels also
-//     must not contain the 0x1F level separator. Bucket names follow the
-//     Storage bucket naming rules. Invalid arguments fail with
-//     *AnalyticsArgumentError before any request is sent.
+//     empty, "." or "..", nor contain '/' or '\'; namespace levels and
+//     table names must also be valid UTF-8 and at most 1024 bytes, and
+//     namespace levels must not contain the 0x1F level separator. Bucket
+//     names follow the Storage bucket naming rules. Invalid arguments fail
+//     with *AnalyticsArgumentError before any request is sent.
 type IcebergCatalog struct {
 	t         *transport.Client
 	warehouse string
@@ -80,12 +90,23 @@ func (e *AnalyticsArgumentError) Error() string {
 	return "storage: invalid " + e.Argument + ": " + e.Reason
 }
 
-// icebergCheckSegment rejects values that are empty, would form a
-// dot-segment ("." or "..") in a URL path, or contain a path separator.
+// icebergMaxNameBytes bounds namespace levels and table names. It is far
+// above any real catalog's identifier limit and only stops absurd inputs
+// from building huge URLs.
+const icebergMaxNameBytes = 1024
+
+// icebergCheckSegment rejects values that are empty, longer than
+// icebergMaxNameBytes, not valid UTF-8, would form a dot-segment ("." or
+// "..") in a URL path, or contain a path separator.
 func icebergCheckSegment(argument, s string) error {
 	switch {
 	case s == "":
 		return &AnalyticsArgumentError{Argument: argument, Reason: "must not be empty"}
+	case len(s) > icebergMaxNameBytes:
+		return &AnalyticsArgumentError{Argument: argument,
+			Reason: "must not be longer than " + strconv.Itoa(icebergMaxNameBytes) + " bytes"}
+	case !utf8.ValidString(s):
+		return &AnalyticsArgumentError{Argument: argument, Reason: "must be valid UTF-8"}
 	case s == "." || s == "..":
 		return &AnalyticsArgumentError{Argument: argument, Reason: `must not be "." or ".."`}
 	case strings.ContainsAny(s, `/\`):
@@ -347,10 +368,12 @@ func (c *IcebergCatalog) fetchPrefix(ctx context.Context) (prefix string, cache 
 // used verbatim. Only RFC 3986 pchar bytes and '/' separators are allowed
 // (unreserved, sub-delims, ':', '@' and well-formed %XX escapes); anything
 // else, including non-ASCII, is rejected so that net/url can never
-// re-escape the path. Each segment must be non-empty, and no component of
-// the decoded segment, split at '/' or '\', may be "." or ".." or all
-// components empty. Encoded separators such as "a%2Fb" are kept; they stay
-// encoded on the wire.
+// re-escape the path. Each segment must be non-empty and decode to valid
+// UTF-8, and no component of the decoded segment, split at '/' or '\',
+// may be all separators or be "." or ".." once cut at its first ';' (a
+// path parameter, as in "..;x") and stripped of trailing NUL bytes, forms
+// that some servers and proxies normalize to a dot-segment. Encoded
+// separators such as "a%2Fb" are kept; they stay encoded on the wire.
 func icebergServerPrefix(p string) (string, error) {
 	p = strings.Trim(p, "/")
 	bad := fmt.Errorf("storage: iceberg server returned an unusable catalog prefix %q", p)
@@ -374,7 +397,7 @@ func icebergServerPrefix(p string) (string, error) {
 			}
 		}
 		dec, err := url.PathUnescape(seg)
-		if err != nil {
+		if err != nil || !utf8.ValidString(dec) {
 			return "", bad
 		}
 		// An encoded separator (%2F, %5C) stays encoded on the wire, so
@@ -386,6 +409,8 @@ func icebergServerPrefix(p string) (string, error) {
 			return "", bad // only separators
 		}
 		for _, part := range parts {
+			part, _, _ = strings.Cut(part, ";")
+			part = strings.TrimRight(part, "\x00")
 			if part == "." || part == ".." {
 				return "", bad
 			}
