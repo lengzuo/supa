@@ -98,5 +98,5 @@ func (c *Client) UnlinkIdentity(ctx context.Context, accessToken, identityID str
 	if err != nil {
 		return err
 	}
-	return c.call(ctx, http.MethodDelete, "/user/identities/"+url.PathEscape(identityID), nil, token, nil, nil)
+	return c.call(ctx, http.MethodDelete, "/user/identities/"+pathSegment(identityID), nil, token, nil, nil)
 }

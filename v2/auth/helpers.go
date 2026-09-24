@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -129,6 +130,9 @@ func (c *Client) decodeSessionResponse(raw []byte) (*AuthResponse, error) {
 // decodeUser mirrors auth-js _userResponse: {user: {...}} or the user
 // object itself.
 func decodeUser(raw []byte) (*User, error) {
+	if isEmptyJSON(raw) {
+		return nil, errors.New("auth: decode user: empty response body")
+	}
 	var wrapped struct {
 		User json.RawMessage `json:"user"`
 	}
@@ -144,6 +148,26 @@ func decodeUser(raw []byte) (*User, error) {
 		return nil, fmt.Errorf("auth: decode user: %w", err)
 	}
 	return &u, nil
+}
+
+// pathSegment escapes one user-supplied path segment: "/" and other
+// reserved characters are percent-encoded, and the dot segments "." and
+// ".." (which URL resolution would collapse, changing the endpoint) are
+// encoded as %2E.
+func pathSegment(s string) string {
+	switch s {
+	case ".":
+		return "%2E"
+	case "..":
+		return "%2E%2E"
+	}
+	return url.PathEscape(s)
+}
+
+// isEmptyJSON reports whether raw is an empty body or JSON null.
+func isEmptyJSON(raw []byte) bool {
+	t := bytes.TrimSpace(raw)
+	return len(t) == 0 || string(t) == "null"
 }
 
 // encodeURIComponent escapes s like JavaScript's encodeURIComponent.

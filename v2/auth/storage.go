@@ -8,6 +8,10 @@ import (
 )
 
 // SessionStorage persists the current session and PKCE code verifiers.
+//
+// The Client calls SetItem and RemoveItem (and some GetItem calls) while it
+// holds its internal session lock, so implementations must be fast and
+// must not call back into the Client (that would deadlock).
 // Implementations must be safe for concurrent use. GetItem returns "" and
 // a nil error when the key is absent.
 type SessionStorage interface {

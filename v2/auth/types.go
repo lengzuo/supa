@@ -2,6 +2,8 @@ package auth
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"time"
 )
 
@@ -22,46 +24,107 @@ func (s *Session) Expiry() time.Time { return time.Unix(s.ExpiresAt, 0) }
 
 // User is a Supabase Auth user.
 type User struct {
-	ID                 string          `json:"id"`
-	Aud                string          `json:"aud"`
-	Role               string          `json:"role,omitempty"`
-	Email              string          `json:"email,omitempty"`
-	Phone              string          `json:"phone,omitempty"`
-	NewEmail           string          `json:"new_email,omitempty"`
-	NewPhone           string          `json:"new_phone,omitempty"`
-	ActionLink         string          `json:"action_link,omitempty"`
-	AppMetadata        map[string]any  `json:"app_metadata"`
-	UserMetadata       map[string]any  `json:"user_metadata"`
-	Identities         []Identity      `json:"identities,omitempty"`
-	Factors            []Factor        `json:"factors,omitempty"`
-	IsAnonymous        bool            `json:"is_anonymous"`
-	IsSSOUser          bool            `json:"is_sso_user,omitempty"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          *time.Time      `json:"updated_at,omitempty"`
-	ConfirmedAt        *time.Time      `json:"confirmed_at,omitempty"`
-	EmailConfirmedAt   *time.Time      `json:"email_confirmed_at,omitempty"`
-	PhoneConfirmedAt   *time.Time      `json:"phone_confirmed_at,omitempty"`
-	ConfirmationSentAt *time.Time      `json:"confirmation_sent_at,omitempty"`
-	RecoverySentAt     *time.Time      `json:"recovery_sent_at,omitempty"`
-	EmailChangeSentAt  *time.Time      `json:"email_change_sent_at,omitempty"`
-	InvitedAt          *time.Time      `json:"invited_at,omitempty"`
-	LastSignInAt       *time.Time      `json:"last_sign_in_at,omitempty"`
-	BannedUntil        *time.Time      `json:"banned_until,omitempty"`
-	DeletedAt          *time.Time      `json:"deleted_at,omitempty"`
-	Raw                json.RawMessage `json:"-"`
+	ID                 string         `json:"id"`
+	Aud                string         `json:"aud"`
+	Role               string         `json:"role,omitempty"`
+	Email              string         `json:"email,omitempty"`
+	Phone              string         `json:"phone,omitempty"`
+	NewEmail           string         `json:"new_email,omitempty"`
+	NewPhone           string         `json:"new_phone,omitempty"`
+	ActionLink         string         `json:"action_link,omitempty"`
+	AppMetadata        map[string]any `json:"app_metadata,omitempty"`
+	UserMetadata       map[string]any `json:"user_metadata,omitempty"`
+	Identities         []Identity     `json:"identities,omitempty"`
+	Factors            []Factor       `json:"factors,omitempty"`
+	IsAnonymous        bool           `json:"is_anonymous"`
+	IsSSOUser          bool           `json:"is_sso_user,omitempty"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          *time.Time     `json:"updated_at,omitempty"`
+	ConfirmedAt        *time.Time     `json:"confirmed_at,omitempty"`
+	EmailConfirmedAt   *time.Time     `json:"email_confirmed_at,omitempty"`
+	PhoneConfirmedAt   *time.Time     `json:"phone_confirmed_at,omitempty"`
+	ConfirmationSentAt *time.Time     `json:"confirmation_sent_at,omitempty"`
+	RecoverySentAt     *time.Time     `json:"recovery_sent_at,omitempty"`
+	EmailChangeSentAt  *time.Time     `json:"email_change_sent_at,omitempty"`
+	InvitedAt          *time.Time     `json:"invited_at,omitempty"`
+	LastSignInAt       *time.Time     `json:"last_sign_in_at,omitempty"`
+	BannedUntil        *time.Time     `json:"banned_until,omitempty"`
+	DeletedAt          *time.Time     `json:"deleted_at,omitempty"`
+	// Raw is the user object as received, including fields this SDK does
+	// not model. MarshalJSON writes those unmodelled fields back, so they
+	// survive a round trip through SessionStorage.
+	Raw json.RawMessage `json:"-"`
 }
 
+// userJSONFields are the JSON names of User's modelled fields.
+var userJSONFields = func() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf(User{})
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			out[name] = true
+		}
+	}
+	return out
+}()
+
 // UnmarshalJSON keeps the raw payload in Raw so fields this SDK does not
-// model are still available.
+// model are still available. Empty-string timestamps (e.g.
+// "created_at": "") are treated as absent.
 func (u *User) UnmarshalJSON(data []byte) error {
 	type plain User
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	src := data
+	cleaned := false
+	for k, v := range fields {
+		if string(v) == `""` && strings.HasSuffix(k, "_at") && userJSONFields[k] {
+			delete(fields, k)
+			cleaned = true
+		}
+	}
+	if cleaned {
+		var err error
+		if src, err = json.Marshal(fields); err != nil {
+			return err
+		}
+	}
 	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
+	if err := json.Unmarshal(src, &p); err != nil {
 		return err
 	}
 	*u = User(p)
 	u.Raw = append(json.RawMessage(nil), data...)
 	return nil
+}
+
+// MarshalJSON encodes the modelled fields and, when Raw holds a JSON
+// object, the fields of Raw that User does not model, so unknown server
+// fields survive a save/load round trip. Modelled fields always come from
+// the struct, never from Raw.
+func (u User) MarshalJSON() ([]byte, error) {
+	type plain User
+	data, err := json.Marshal(plain(u))
+	if err != nil || len(u.Raw) == 0 {
+		return data, err
+	}
+	var extra map[string]json.RawMessage
+	if json.Unmarshal(u.Raw, &extra) != nil {
+		return data, nil
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	for k, v := range extra {
+		if !userJSONFields[k] {
+			out[k] = v
+		}
+	}
+	return json.Marshal(out)
 }
 
 // Identity links a user to a sign-in provider.

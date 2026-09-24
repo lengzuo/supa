@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/lengzuo/supa/v2/internal/transport"
@@ -80,7 +79,7 @@ type AdminCreateOAuthClientParams struct {
 	// ClientURI is the client's home page.
 	ClientURI string `json:"client_uri,omitempty"`
 	// RedirectURIs are the allowed redirect URIs. Required.
-	RedirectURIs []string `json:"redirect_uris"`
+	RedirectURIs []string `json:"redirect_uris,omitempty"`
 	// GrantTypes defaults to authorization_code and refresh_token.
 	GrantTypes []string `json:"grant_types,omitempty"`
 	// ResponseTypes defaults to ["code"].
@@ -113,7 +112,7 @@ func adminClientPath(clientID string) (string, error) {
 	if clientID == "" {
 		return "", fmt.Errorf("%w: client ID is required", ErrInvalidArgument)
 	}
-	return "/admin/oauth/clients/" + url.PathEscape(clientID), nil
+	return "/admin/oauth/clients/" + pathSegment(clientID), nil
 }
 
 // ListClients returns a page of OAuth clients. params may be nil.

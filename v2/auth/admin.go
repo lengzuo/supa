@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -63,7 +64,7 @@ func (c *Client) adminRequest(ctx context.Context, req *transport.Request, out a
 	// {Authorization: Bearer <key>, ...custom headers}. The transport gives
 	// a per-request Token precedence over headers, so only set it when the
 	// caller has not configured their own Authorization header.
-	if c.cfg.Headers.Get("Authorization") == "" && req.Header.Get("Authorization") == "" {
+	if !c.customAuth && req.Header.Get("Authorization") == "" {
 		req.Token = c.cfg.APIKey
 	}
 	h, err := c.t.DoJSON(ctx, req, out)
@@ -148,8 +149,8 @@ func (c *Client) adminUser(ctx context.Context, req *transport.Request) (*User, 
 }
 
 func adminDecodeUser(raw json.RawMessage) (*User, error) {
-	if len(raw) == 0 {
-		return nil, nil
+	if isEmptyJSON(raw) {
+		return nil, errors.New("auth: decode user: empty response body")
 	}
 	var wrapped struct {
 		User json.RawMessage `json:"user"`
@@ -239,20 +240,31 @@ func (a *AdminAPI) GenerateLink(ctx context.Context, params AdminGenerateLinkPar
 	if _, err := a.c.adminRequest(ctx, req, &raw); err != nil {
 		return nil, err
 	}
-	out := &AdminGenerateLinkResponse{}
-	if len(raw) == 0 {
-		return out, nil
+	if isEmptyJSON(raw) {
+		return nil, errors.New("auth: decode generate_link response: empty body")
 	}
+	out := &AdminGenerateLinkResponse{}
 	if err := json.Unmarshal(raw, &out.Properties); err != nil {
 		return nil, fmt.Errorf("auth: decode generate_link response: %w", err)
 	}
-	var u User
-	if err := json.Unmarshal(raw, &u); err != nil {
+	// The link properties (secrets such as the OTP and hashed token) belong
+	// to Properties only: strip them from the user payload before decoding,
+	// so they do not linger in User.Raw (auth-js _generateLinkResponse).
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, fmt.Errorf("auth: decode generate_link response: %w", err)
 	}
-	// The link properties belong to Properties, not the user (auth-js
-	// _generateLinkResponse strips them from the user object).
-	u.ActionLink = ""
+	for _, k := range []string{"action_link", "email_otp", "hashed_token", "redirect_to", "verification_type"} {
+		delete(fields, k)
+	}
+	userJSON, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("auth: decode generate_link response: %w", err)
+	}
+	var u User
+	if err := json.Unmarshal(userJSON, &u); err != nil {
+		return nil, fmt.Errorf("auth: decode generate_link response: %w", err)
+	}
 	out.User = &u
 	return out, nil
 }
@@ -401,7 +413,7 @@ func (a *AdminAPI) GetUserByID(ctx context.Context, uid string) (*User, error) {
 	if err := adminValidateUUID("user ID", uid); err != nil {
 		return nil, err
 	}
-	return a.c.adminUser(ctx, &transport.Request{Method: http.MethodGet, Path: "/admin/users/" + uid})
+	return a.c.adminUser(ctx, &transport.Request{Method: http.MethodGet, Path: "/admin/users/" + pathSegment(uid)})
 }
 
 // UpdateUserByID updates the user with the given ID, which must be a UUID.
@@ -409,20 +421,20 @@ func (a *AdminAPI) UpdateUserByID(ctx context.Context, uid string, attrs AdminUs
 	if err := adminValidateUUID("user ID", uid); err != nil {
 		return nil, err
 	}
-	return a.c.adminUser(ctx, &transport.Request{Method: http.MethodPut, Path: "/admin/users/" + uid, Body: attrs})
+	return a.c.adminUser(ctx, &transport.Request{Method: http.MethodPut, Path: "/admin/users/" + pathSegment(uid), Body: attrs})
 }
 
 // DeleteUser deletes the user with the given ID, which must be a UUID.
 // When shouldSoftDelete is true the user is soft-deleted: it is marked
 // deleted and its personal data is obfuscated, but the row is kept.
-func (a *AdminAPI) DeleteUser(ctx context.Context, id string, shouldSoftDelete bool) (*User, error) {
-	if err := adminValidateUUID("user ID", id); err != nil {
+func (a *AdminAPI) DeleteUser(ctx context.Context, uid string, shouldSoftDelete bool) (*User, error) {
+	if err := adminValidateUUID("user ID", uid); err != nil {
 		return nil, err
 	}
 	body := struct {
 		ShouldSoftDelete bool `json:"should_soft_delete"`
 	}{shouldSoftDelete}
-	return a.c.adminUser(ctx, &transport.Request{Method: http.MethodDelete, Path: "/admin/users/" + id, Body: body})
+	return a.c.adminUser(ctx, &transport.Request{Method: http.MethodDelete, Path: "/admin/users/" + pathSegment(uid), Body: body})
 }
 
 // AdminMFAAPI manages users' MFA factors. Obtain it with AdminAPI.MFA.
@@ -436,7 +448,7 @@ func (m *AdminMFAAPI) ListFactors(ctx context.Context, userID string) ([]Factor,
 		return nil, err
 	}
 	var factors []Factor
-	req := &transport.Request{Method: http.MethodGet, Path: "/admin/users/" + userID + "/factors"}
+	req := &transport.Request{Method: http.MethodGet, Path: "/admin/users/" + pathSegment(userID) + "/factors"}
 	if _, err := m.c.adminRequest(ctx, req, &factors); err != nil {
 		return nil, err
 	}
@@ -457,7 +469,7 @@ func (m *AdminMFAAPI) DeleteFactor(ctx context.Context, userID, factorID string)
 		return nil, err
 	}
 	var f Factor
-	req := &transport.Request{Method: http.MethodDelete, Path: "/admin/users/" + userID + "/factors/" + factorID}
+	req := &transport.Request{Method: http.MethodDelete, Path: "/admin/users/" + pathSegment(userID) + "/factors/" + pathSegment(factorID)}
 	if _, err := m.c.adminRequest(ctx, req, &f); err != nil {
 		return nil, err
 	}

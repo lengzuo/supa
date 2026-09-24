@@ -2,11 +2,9 @@ package auth
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/lengzuo/supa/v2/internal/transport"
@@ -39,7 +37,7 @@ func (c *Client) MFA() *MFAAPI { return &MFAAPI{c: c} }
 // Client's own session. An empty accessToken restores the default
 // stored-session behavior.
 func (m *MFAAPI) WithAccessToken(accessToken string) *MFAAPI {
-	return &MFAAPI{c: m.c, token: accessToken}
+	return &MFAAPI{c: m.c, token: strings.TrimSpace(accessToken)}
 }
 
 // MFAChannel is the messaging channel used to deliver a phone factor code.
@@ -255,15 +253,9 @@ type MFAAssuranceLevelResponse struct {
 	CurrentAuthenticationMethods []AMREntry `json:"currentAuthenticationMethods"`
 }
 
-// mfaAccessToken returns the token to authenticate a call with: the
-// explicit token, or the stored session's access token.
-func (m *MFAAPI) mfaAccessToken(ctx context.Context) (string, error) {
-	token, _, err := m.mfaSession(ctx)
-	return token, err
-}
-
-// mfaSession is mfaAccessToken that also returns the stored session the
-// token came from (nil for an explicit token).
+// mfaSession returns the token to authenticate a call with (the explicit
+// token, or the stored session's access token) and the stored session it
+// came from (nil for an explicit token).
 func (m *MFAAPI) mfaSession(ctx context.Context) (string, *Session, error) {
 	if m.token != "" {
 		return m.token, nil, nil
@@ -355,7 +347,7 @@ func (m *MFAAPI) Unenroll(ctx context.Context, params MFAUnenrollParams) (*MFAUn
 		return nil, err
 	}
 	var out MFAUnenrollResponse
-	if err := m.mfaDo(ctx, http.MethodDelete, "/factors/"+url.PathEscape(params.FactorID), nil, &out); err != nil {
+	if err := m.mfaDo(ctx, http.MethodDelete, "/factors/"+pathSegment(params.FactorID), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -375,7 +367,7 @@ func (m *MFAAPI) Challenge(ctx context.Context, params MFAChallengeParams) (*MFA
 		}
 	}
 	var out MFAChallengeResponse
-	path := "/factors/" + url.PathEscape(params.FactorID) + "/challenge"
+	path := "/factors/" + pathSegment(params.FactorID) + "/challenge"
 	if err := m.mfaDo(ctx, http.MethodPost, path, params, &out); err != nil {
 		return nil, err
 	}
@@ -411,11 +403,14 @@ func (m *MFAAPI) Verify(ctx context.Context, params MFAVerifyParams) (*Session, 
 		}
 		body.WebAuthn = params.WebAuthn
 	} else {
+		if err := mfaRequire(params.Code, "code"); err != nil {
+			return nil, err
+		}
 		code := params.Code
 		body.Code = &code
 	}
 	var s Session
-	path := "/factors/" + url.PathEscape(params.FactorID) + "/verify"
+	path := "/factors/" + pathSegment(params.FactorID) + "/verify"
 	basis, err := m.mfaDoBasis(ctx, http.MethodPost, path, body, &s)
 	if err != nil {
 		return nil, err
@@ -438,14 +433,21 @@ func (m *MFAAPI) ChallengeAndVerify(ctx context.Context, params MFAChallengeAndV
 
 // ListFactors fetches the current user (GET /user) and returns their
 // factors: All holds every factor, and the per-type lists hold only
-// verified factors, like auth-js.
+// verified factors, like auth-js. In stored-session mode, a
+// session_not_found response removes the stored session (if it is still
+// the one used) and emits SIGNED_OUT, like GetUser.
 func (m *MFAAPI) ListFactors(ctx context.Context) (*MFAListFactorsResponse, error) {
-	token, err := m.mfaAccessToken(ctx)
+	token, stored, err := m.mfaSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	user, err := m.mfaGetUser(ctx, token)
 	if err != nil {
+		if stored != nil && isSessionMissing(err) {
+			// Like auth-js getUser: the session no longer exists server-side.
+			// Remove it only if it is still the stored one.
+			_, _ = m.c.clearSessionIf(ctx, func(s *Session) bool { return s.AccessToken == token })
+		}
 		return nil, err
 	}
 	out := &MFAListFactorsResponse{
@@ -535,11 +537,11 @@ func (m *MFAAPI) GetAuthenticatorAssuranceLevel(ctx context.Context) (*MFAAssura
 
 // mfaGetUser fetches the user that owns token (GET /user).
 func (m *MFAAPI) mfaGetUser(ctx context.Context, token string) (*User, error) {
-	var u User
-	if err := m.c.request(ctx, &transport.Request{Method: http.MethodGet, Path: "/user", Token: token}, &u); err != nil {
+	var raw json.RawMessage
+	if err := m.c.request(ctx, &transport.Request{Method: http.MethodGet, Path: "/user", Token: token}, &raw); err != nil {
 		return nil, err
 	}
-	return &u, nil
+	return decodeUser(raw)
 }
 
 // mfaTokenClaims holds the claims GetAuthenticatorAssuranceLevel needs.
@@ -549,61 +551,17 @@ type mfaTokenClaims struct {
 }
 
 // mfaParseAccessToken extracts the aal and amr claims from an unverified
-// JWT with decodeJWT. Because Claims.AMR only models the object form of
-// amr ([{"method":"password","timestamp":1}]), a token that decodeJWT
-// rejects is re-parsed by mfaParseClaimsLenient, which also accepts the
-// RFC 8176 string form (["pwd"]) that custom access token hooks may emit.
+// JWT with decodeJWT. AMREntry accepts both the object form of amr
+// ([{"method":"password","timestamp":1}]) and the RFC 8176 string form
+// (["pwd"]) that custom access token hooks may emit.
 func mfaParseAccessToken(token string) (*mfaTokenClaims, error) {
 	jwt, err := decodeJWT(token)
 	if err != nil {
-		return mfaParseClaimsLenient(token)
+		return nil, err
 	}
 	amr := jwt.Claims.AMR
 	if amr == nil {
 		amr = []AMREntry{}
 	}
 	return &mfaTokenClaims{aal: MFAAssuranceLevel(jwt.Claims.AAL), amr: amr}, nil
-}
-
-// mfaParseClaimsLenient parses aal and amr, accepting both amr forms.
-func mfaParseClaimsLenient(token string) (*mfaTokenClaims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, ErrInvalidJWT
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, ErrInvalidJWT
-	}
-	var raw struct {
-		AAL any             `json:"aal"`
-		AMR json.RawMessage `json:"amr"`
-	}
-	if err := json.Unmarshal(payload, &raw); err != nil {
-		return nil, ErrInvalidJWT
-	}
-	out := &mfaTokenClaims{amr: []AMREntry{}}
-	if s, ok := raw.AAL.(string); ok {
-		out.aal = MFAAssuranceLevel(s)
-	}
-	if len(raw.AMR) == 0 || string(raw.AMR) == "null" {
-		return out, nil
-	}
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw.AMR, &items); err != nil {
-		return nil, ErrInvalidJWT
-	}
-	for _, it := range items {
-		var method string
-		if err := json.Unmarshal(it, &method); err == nil {
-			out.amr = append(out.amr, AMREntry{Method: method})
-			continue
-		}
-		var e AMREntry
-		if err := json.Unmarshal(it, &e); err != nil {
-			return nil, ErrInvalidJWT
-		}
-		out.amr = append(out.amr, e)
-	}
-	return out, nil
 }

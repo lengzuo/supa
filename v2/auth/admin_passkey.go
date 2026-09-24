@@ -28,7 +28,7 @@ func (p *AdminPasskeyAPI) ListPasskeys(ctx context.Context, userID string) ([]Ad
 		return nil, err
 	}
 	var out []AdminPasskey
-	if _, err := p.c.adminRequest(ctx, &transport.Request{Method: http.MethodGet, Path: "/admin/users/" + userID + "/passkeys"}, &out); err != nil {
+	if _, err := p.c.adminRequest(ctx, &transport.Request{Method: http.MethodGet, Path: "/admin/users/" + pathSegment(userID) + "/passkeys"}, &out); err != nil {
 		return nil, err
 	}
 	if out == nil {
@@ -46,6 +46,6 @@ func (p *AdminPasskeyAPI) DeletePasskey(ctx context.Context, userID, passkeyID s
 	if err := adminValidateUUID("passkey ID", passkeyID); err != nil {
 		return err
 	}
-	_, err := p.c.adminRequest(ctx, &transport.Request{Method: http.MethodDelete, Path: "/admin/users/" + userID + "/passkeys/" + passkeyID}, nil)
+	_, err := p.c.adminRequest(ctx, &transport.Request{Method: http.MethodDelete, Path: "/admin/users/" + pathSegment(userID) + "/passkeys/" + pathSegment(passkeyID)}, nil)
 	return err
 }
