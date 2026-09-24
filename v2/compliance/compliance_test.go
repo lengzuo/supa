@@ -142,7 +142,15 @@ func readMappings(t *testing.T) []feature {
 		}
 		var cur *feature
 		var listKey string
+		folding := false // inside a ">"/"|" block scalar for reason
 		for n, raw := range strings.Split(string(data), "\n") {
+			if folding {
+				if ind := len(raw) - len(strings.TrimLeft(raw, " ")); ind > 4 || strings.TrimSpace(raw) == "" {
+					cur.reason = strings.TrimSpace(cur.reason + " " + strings.TrimSpace(raw))
+					continue
+				}
+				folding = false
+			}
 			line := stripComment(raw)
 			if strings.TrimSpace(line) == "" || strings.TrimSpace(line) == "features:" {
 				continue
@@ -175,7 +183,12 @@ func readMappings(t *testing.T) []feature {
 				case "status":
 					cur.status = unquote(val)
 				case "reason":
-					cur.reason = unquote(val)
+					switch val {
+					case ">", ">-", "|", "|-":
+						folding = true
+					default:
+						cur.reason = unquote(val)
+					}
 				case "symbols":
 					cur.symbols = append(cur.symbols, inlineList(val)...)
 				case "tests":

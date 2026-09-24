@@ -132,7 +132,10 @@ func (c *Client) fetchJWK(ctx context.Context, kid string, supplied []JWK) (*JWK
 			return &k, nil
 		}
 	}
-	endpoint := c.t.URL("/.well-known/jwks.json", nil)
+	endpoint, err := c.t.URL("/.well-known/jwks.json", nil)
+	if err != nil {
+		return nil, err
+	}
 	now := c.now()
 
 	jwksCache.Lock()

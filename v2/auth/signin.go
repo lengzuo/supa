@@ -318,7 +318,11 @@ func (c *Client) providerURL(ctx context.Context, path string, params SignInWith
 	if skipHTTPRedirect {
 		parts = append(parts, "skip_http_redirect=true")
 	}
-	return c.t.URL(path, nil) + "?" + strings.Join(parts, "&"), flow, nil
+	base, err := c.t.URL(path, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	return base + "?" + strings.Join(parts, "&"), flow, nil
 }
 
 // SignInWithIDTokenParams sign in (or link) with a provider-issued OIDC ID
