@@ -1,3 +1,4 @@
 tests
 .idea
-vendor.claude/worktrees/
+vendor
+.claude/worktrees/
