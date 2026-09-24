@@ -507,7 +507,7 @@ func TestIcebergServerPrefixValidation(t *testing.T) {
 func TestIcebergServerPrefixNormalizedDotSegments(t *testing.T) {
 	for _, bad := range []string{
 		"..;x", "a/..;jsessionid=1", ".;", "%2E%2E%3Bx", "a%2F..%3Bx", "..%00", ".%00%00", "a%2F..%00%3Bx",
-		"%FF", "a%C3", "ok/%C0%AF",
+		"%FF", "a%C3", "ok/%C0%AF", "..%00x", ".%00.", "a/..%00evil",
 	} {
 		if got, err := icebergServerPrefix(bad); err == nil {
 			t.Errorf("icebergServerPrefix(%q) = %q, want error", bad, got)

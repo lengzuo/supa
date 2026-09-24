@@ -253,10 +253,21 @@ func (c *Client) CreateBucket(ctx context.Context, id string, opts *BucketOption
 // Only the settings set in opts are sent; the others keep their current
 // values. In particular a nil opts.Public leaves the bucket's visibility
 // unchanged (storage-js makes public a required argument and always sends
-// it). opts.Type is ignored. opts may be nil, which sends no settings.
+// it). opts.Type is ignored.
+//
+// The Storage API requires at least one of public, file_size_limit or
+// allowed_mime_types in an update, so UpdateBucket returns an error without
+// sending anything unless opts sets Public, FileSizeLimit, AllowedMIMETypes
+// (nil vs empty matters: a non-nil empty slice is sent as []) or one of the
+// Clear flags. To change only VersioningStatus, also set Public to the
+// bucket's current visibility.
 func (c *Client) UpdateBucket(ctx context.Context, id string, opts *BucketOptions) (string, error) {
 	if id == "" {
 		return "", errEmptyBucketID
+	}
+	if opts == nil || (opts.Public == nil && opts.FileSizeLimit == "" && !opts.ClearFileSizeLimit &&
+		opts.AllowedMIMETypes == nil && !opts.ClearAllowedMIMETypes) {
+		return "", errors.New("storage: UpdateBucket requires at least one of Public, FileSizeLimit, AllowedMIMETypes or a Clear flag")
 	}
 	body, err := newBucketBody(id, opts, false)
 	if err != nil {

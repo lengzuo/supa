@@ -171,10 +171,17 @@ func TestUpdateBucketPublicOptional(t *testing.T) {
 	c := newTestClient(t, fs)
 	ctx := context.Background()
 
-	if _, err := c.UpdateBucket(ctx, "avatars", nil); err != nil {
-		t.Fatal(err)
+	// The Storage API rejects updates without public/file_size_limit/
+	// allowed_mime_types, so these fail before any request is sent.
+	before := fs.count()
+	for _, opts := range []*BucketOptions{nil, {}, {VersioningStatus: "Enabled"}} {
+		if _, err := c.UpdateBucket(ctx, "avatars", opts); err == nil {
+			t.Errorf("UpdateBucket(%+v) succeeded; want client-side error", opts)
+		}
 	}
-	assertJSONBody(t, fs.last(t), `{"id":"avatars","name":"avatars"}`)
+	if fs.count() != before {
+		t.Fatalf("requests sent for empty updates")
+	}
 
 	if _, err := c.UpdateBucket(ctx, "avatars", &BucketOptions{FileSizeLimit: "20MB"}); err != nil {
 		t.Fatal(err)

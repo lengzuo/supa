@@ -410,7 +410,7 @@ func icebergServerPrefix(p string) (string, error) {
 		}
 		for _, part := range parts {
 			part, _, _ = strings.Cut(part, ";")
-			part = strings.TrimRight(part, "\x00")
+			part, _, _ = strings.Cut(part, "\x00") // a NUL-terminating reader would stop here
 			if part == "." || part == ".." {
 				return "", bad
 			}
