@@ -191,7 +191,7 @@ func TestPathSegmentEscaping(t *testing.T) {
 		{"admin oauth client", func() { _ = c.Admin().OAuth().DeleteClient(ctx, "..") }, "/auth/v1/admin/oauth/clients/%2E%2E"},
 		{"custom provider", func() { _ = c.Admin().CustomProviders().DeleteProvider(ctx, "..") }, "/auth/v1/admin/custom-providers/%2E%2E"},
 		{"oauth authorization", func() {
-			_, _ = c.OAuth().WithToken("jwt").GetAuthorizationDetails(ctx, "..")
+			_, _ = c.OAuth().WithAccessToken("jwt").GetAuthorizationDetails(ctx, "..")
 		}, "/auth/v1/oauth/authorizations/%2E%2E"},
 	}
 	for _, tc := range calls {

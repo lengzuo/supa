@@ -32,7 +32,7 @@ features:
   auth.mfa.verify:
     status: implemented
     symbols: [auth.MFAAPI.Verify, auth.MFAAPI.WithAccessToken, auth.MFAVerifyParams, auth.MFAVerifyWebAuthnParams]
-    tests: [TestMFAVerify, TestMFAVerifyKeepsServerExpiresAt, TestMFAVerifyWebAuthn, TestMFAVerifyErrors, TestMFAWithAccessToken, TestMFAContextCanceled, TestMFAConcurrentVerify, TestMFAInputValidation]
+    tests: [TestMFAVerify, TestMFAVerifyKeepsServerExpiresAt, TestMFAVerifyWebAuthn, TestMFAVerifyErrors, TestMFAWithAccessToken, TestMFAContextCanceled, TestMFAConcurrentVerify, TestMFAInputValidation, TestMFAVerifyRacingRefresh, TestRefreshVerifyChaosStrictServer]
     reason: ""
   auth.mfa_recovery_codes.generate:
     status: implemented

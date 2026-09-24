@@ -105,7 +105,7 @@ func TestConcurrentPKCEFlows(t *testing.T) {
 			t.Fatalf("index = %v", idx)
 		}
 		// B's callback arrives through a URL carrying sb_flow_id.
-		if _, err := c.GetSessionFromURL(ctx, "https://app/cb?code=code-b&"+PKCEFlowIDParam+"="+b.FlowID); err != nil {
+		if _, err := c.GetSessionFromURL(ctx, "https://app/cb?code=code-b&"+PKCEFlowIDParam+"="+b.FlowID, nil); err != nil {
 			t.Fatal(err)
 		}
 		if got := srv.last(t).Body["code_verifier"]; got != vb {
@@ -183,7 +183,7 @@ func TestGetSessionFromURL(t *testing.T) {
 		exp := time.Now().Unix() + 3600
 		frag := url.Values{"access_token": {"frag-at"}, "refresh_token": {"frag-rt"}, "expires_in": {"3600"},
 			"expires_at": {strconv.FormatInt(exp, 10)}, "token_type": {"bearer"}, "type": {"recovery"}, "provider_token": {"ptok"}}
-		resp, err := c.GetSessionFromURL(ctx, "https://app/cb#"+frag.Encode())
+		resp, err := c.GetSessionFromURL(ctx, "https://app/cb#"+frag.Encode(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,7 +199,7 @@ func TestGetSessionFromURL(t *testing.T) {
 	})
 	t.Run("error parameters", func(t *testing.T) {
 		c := srv.client(t)
-		_, err := c.GetSessionFromURL(ctx, "https://app/cb?error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid")
+		_, err := c.GetSessionFromURL(ctx, "https://app/cb?error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid", nil)
 		var ae *Error
 		if !errors.As(err, &ae) || ae.Code != "otp_expired" || ae.Message != "Email link is invalid" {
 			t.Fatalf("err = %#v", err)
@@ -207,17 +207,17 @@ func TestGetSessionFromURL(t *testing.T) {
 	})
 	t.Run("flow type mismatch", func(t *testing.T) {
 		c := srv.client(t)
-		if _, err := c.GetSessionFromURL(ctx, "https://app/cb?code=abc"); !errors.Is(err, ErrImplicitGrantRedirect) {
+		if _, err := c.GetSessionFromURL(ctx, "https://app/cb?code=abc", nil); !errors.Is(err, ErrImplicitGrantRedirect) {
 			t.Fatalf("err = %v", err)
 		}
 		pc := srv.client(t, func(cfg *Config) { cfg.FlowType = FlowPKCE })
-		if _, err := pc.GetSessionFromURL(ctx, "https://app/cb#access_token=x"); !errors.Is(err, ErrPKCEGrantCodeExchange) {
+		if _, err := pc.GetSessionFromURL(ctx, "https://app/cb#access_token=x", nil); !errors.Is(err, ErrPKCEGrantCodeExchange) {
 			t.Fatalf("err = %v", err)
 		}
-		if _, err := c.GetSessionFromURL(ctx, "https://app/cb#access_token=x"); !errors.Is(err, ErrImplicitGrantRedirect) {
+		if _, err := c.GetSessionFromURL(ctx, "https://app/cb#access_token=x", nil); !errors.Is(err, ErrImplicitGrantRedirect) {
 			t.Fatalf("incomplete fragment err = %v", err)
 		}
-		if _, err := c.GetSessionFromURL(ctx, "https://app/plain"); !errors.Is(err, ErrImplicitGrantRedirect) {
+		if _, err := c.GetSessionFromURL(ctx, "https://app/plain", nil); !errors.Is(err, ErrImplicitGrantRedirect) {
 			t.Fatalf("plain url err = %v", err)
 		}
 	})
@@ -226,7 +226,7 @@ func TestGetSessionFromURL(t *testing.T) {
 		if _, err := pc.SignInWithOTP(ctx, SignInWithOTPParams{Email: "a@b.c"}); err != nil {
 			t.Fatal(err)
 		}
-		resp, err := pc.GetSessionFromURL(ctx, "https://app/cb?code=the-code")
+		resp, err := pc.GetSessionFromURL(ctx, "https://app/cb?code=the-code", nil)
 		if err != nil || resp.Session == nil {
 			t.Fatalf("GetSessionFromURL = %+v, %v", resp, err)
 		}

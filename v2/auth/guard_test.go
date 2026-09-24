@@ -276,7 +276,7 @@ func TestGetSessionFromURLInvalidFlowID(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"bad!", ""} {
-		_, err := c.GetSessionFromURL(ctx, "https://app/cb?code=abc&"+PKCEFlowIDParam+"="+bad)
+		_, err := c.GetSessionFromURL(ctx, "https://app/cb?code=abc&"+PKCEFlowIDParam+"="+bad, nil)
 		if !errors.Is(err, ErrPKCEVerifierMissing) {
 			t.Fatalf("flow id %q: err = %v", bad, err)
 		}
@@ -293,7 +293,7 @@ func TestGetSessionFromURLInvalidFlowID(t *testing.T) {
 func TestGetSessionFromURLErrorParams(t *testing.T) {
 	srv := newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {})
 	c := srv.client(t)
-	_, err := c.GetSessionFromURL(context.Background(), "https://app/cb#error=access_denied&error_code=otp_expired")
+	_, err := c.GetSessionFromURL(context.Background(), "https://app/cb#error=access_denied&error_code=otp_expired", nil)
 	var ae *Error
 	if !errors.As(err, &ae) || ae.Message != "Error in URL with unspecified error_description" || ae.Code != "otp_expired" || ae.RedirectError != "access_denied" {
 		t.Fatalf("err = %#v", err)
@@ -301,7 +301,7 @@ func TestGetSessionFromURLErrorParams(t *testing.T) {
 	if !errors.Is(err, ErrImplicitGrantRedirect) || !errors.Is(err, &Error{Code: ErrorCodeOTPExpired}) {
 		t.Fatalf("err %v does not match ErrImplicitGrantRedirect and its code", err)
 	}
-	_, err = c.GetSessionFromURL(context.Background(), "https://app/cb?error_description=Denied")
+	_, err = c.GetSessionFromURL(context.Background(), "https://app/cb?error_description=Denied", nil)
 	if !errors.As(err, &ae) || ae.Message != "Denied" || ae.Code != "unspecified_code" || !errors.Is(err, ErrImplicitGrantRedirect) {
 		t.Fatalf("err = %#v", err)
 	}

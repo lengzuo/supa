@@ -20,7 +20,7 @@ func oauthStoreSession(t *testing.T, c *Client, token string) {
 // upstream: auth-js src/GoTrueClient.ts _getAuthorizationDetails
 func TestOAuthGetAuthorizationDetails(t *testing.T) {
 	c, got := adminTestServer(t, http.StatusOK, oauthTestDetailsJSON, nil)
-	d, err := c.OAuth().WithToken("user-jwt").GetAuthorizationDetails(context.Background(), "auth_1")
+	d, err := c.OAuth().WithAccessToken("user-jwt").GetAuthorizationDetails(context.Background(), "auth_1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestOAuthGetAuthorizationDetails(t *testing.T) {
 
 	body, h := adminAPIErrorBody("oauth_authorization_not_found", "not found")
 	c, _ = adminTestServer(t, http.StatusNotFound, body, h)
-	_, err = c.OAuth().WithToken("t").GetAuthorizationDetails(context.Background(), "auth_1")
+	_, err = c.OAuth().WithAccessToken("t").GetAuthorizationDetails(context.Background(), "auth_1")
 	adminWantAPIError(t, err, 404, "oauth_authorization_not_found")
 }
 
@@ -84,7 +84,7 @@ func TestOAuthApproveAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := c2.OAuth().WithToken("user-jwt").ApproveAuthorization(context.Background(), "auth_1")
+	r, err := c2.OAuth().WithAccessToken("user-jwt").ApproveAuthorization(context.Background(), "auth_1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestOAuthApproveAuthorization(t *testing.T) {
 
 	body, h := adminAPIErrorBody("validation_failed", "expired")
 	c, _ = adminTestServer(t, http.StatusBadRequest, body, h)
-	_, err = c.OAuth().WithToken("t").ApproveAuthorization(context.Background(), "auth_1")
+	_, err = c.OAuth().WithAccessToken("t").ApproveAuthorization(context.Background(), "auth_1")
 	adminWantAPIError(t, err, 400, "validation_failed")
 }
 
@@ -118,7 +118,7 @@ func TestOAuthDenyAuthorization(t *testing.T) {
 
 	body, h := adminAPIErrorBody(ErrorCodeBadJWT, "bad jwt")
 	c, _ = adminTestServer(t, http.StatusUnauthorized, body, h)
-	_, err = c.OAuth().WithToken("t").DenyAuthorization(context.Background(), "auth_1")
+	_, err = c.OAuth().WithAccessToken("t").DenyAuthorization(context.Background(), "auth_1")
 	adminWantAPIError(t, err, 401, ErrorCodeBadJWT)
 }
 
@@ -126,7 +126,7 @@ func TestOAuthDenyAuthorization(t *testing.T) {
 func TestOAuthListGrants(t *testing.T) {
 	resp := `[{"client":{"id":"cl_123","name":"Acme","uri":"https://acme.example","logo_uri":""},"scopes":["openid","email"],"granted_at":"2025-03-01T12:00:00Z"}]`
 	c, got := adminTestServer(t, http.StatusOK, resp, nil)
-	gs, err := c.OAuth().WithToken("user-jwt").ListGrants(context.Background())
+	gs, err := c.OAuth().WithAccessToken("user-jwt").ListGrants(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,31 +137,31 @@ func TestOAuthListGrants(t *testing.T) {
 
 	body, h := adminAPIErrorBody(ErrorCodeBadJWT, "bad jwt")
 	c, _ = adminTestServer(t, http.StatusUnauthorized, body, h)
-	_, err = c.OAuth().WithToken("t").ListGrants(context.Background())
+	_, err = c.OAuth().WithAccessToken("t").ListGrants(context.Background())
 	adminWantAPIError(t, err, 401, ErrorCodeBadJWT)
 }
 
 // upstream: auth-js src/GoTrueClient.ts _revokeOAuthGrant
 func TestOAuthRevokeGrant(t *testing.T) {
 	c, got := adminTestServer(t, http.StatusNoContent, "", nil)
-	if err := c.OAuth().WithToken("user-jwt").RevokeGrant(context.Background(), "cl_123"); err != nil {
+	if err := c.OAuth().WithAccessToken("user-jwt").RevokeGrant(context.Background(), "cl_123"); err != nil {
 		t.Fatal(err)
 	}
 	adminCheck(t, adminOne(t, got), http.MethodDelete, "/auth/v1/user/oauth/grants", "client_id=cl_123", "user-jwt")
-	if err := c.OAuth().WithToken("t").RevokeGrant(context.Background(), ""); !errors.Is(err, ErrInvalidArgument) {
+	if err := c.OAuth().WithAccessToken("t").RevokeGrant(context.Background(), ""); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("err = %v", err)
 	}
 
 	body, h := adminAPIErrorBody("oauth_grant_not_found", "nf")
 	c, _ = adminTestServer(t, http.StatusNotFound, body, h)
-	adminWantAPIError(t, c.OAuth().WithToken("t").RevokeGrant(context.Background(), "cl_123"), 404, "oauth_grant_not_found")
+	adminWantAPIError(t, c.OAuth().WithAccessToken("t").RevokeGrant(context.Background(), "cl_123"), 404, "oauth_grant_not_found")
 }
 
 func TestOAuthContextCanceled(t *testing.T) {
 	c, got := adminTestServer(t, http.StatusOK, `[]`, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.OAuth().WithToken("t").ListGrants(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := c.OAuth().WithAccessToken("t").ListGrants(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v", err)
 	}
 	if len(got()) != 0 {
@@ -172,8 +172,8 @@ func TestOAuthContextCanceled(t *testing.T) {
 func TestOAuthWithTokenDoesNotMutate(t *testing.T) {
 	c, _ := adminTestServer(t, http.StatusOK, `[]`, nil)
 	base := c.OAuth()
-	_ = base.WithToken("a")
+	_ = base.WithAccessToken("a")
 	if base.token != "" {
-		t.Error("WithToken mutated the receiver")
+		t.Error("WithAccessToken mutated the receiver")
 	}
 }

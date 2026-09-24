@@ -152,11 +152,14 @@ func (c *Client) callRefreshOnce(ctx context.Context, refreshToken string, epoch
 	}
 }
 
-// runRefresh performs one shared refresh. When it ends, the in-flight
-// entry is removed first (so a listener that refreshes starts a new call
-// instead of joining this one), then the events it committed are
-// delivered, and only then are the waiting callers released, so a caller
-// returns after its TOKEN_REFRESHED / SIGNED_OUT has reached listeners.
+// runRefresh performs one shared refresh. The snapshot, the request and
+// the commit run under rotateMu, so an MFA verification (which also rotates
+// the refresh token server-side) can never interleave with it. When it
+// ends, rotateMu is released, the in-flight entry is removed (so a
+// listener that refreshes starts a new call instead of joining this one),
+// the queued events are delivered (by this goroutine, or by one that is
+// already delivering, in commit order; see OnAuthStateChange), and only
+// then are the waiting callers released.
 func (c *Client) runRefresh(ctx context.Context, refreshToken string, epoch uint64, fromStorage bool, call *refreshCall) {
 	defer func() {
 		c.refreshMu.Lock()
@@ -165,6 +168,8 @@ func (c *Client) runRefresh(ctx context.Context, refreshToken string, epoch uint
 		c.deliverEvents()
 		close(call.done)
 	}()
+	c.rotateMu.Lock()
+	defer c.rotateMu.Unlock() // runs before the delivery above
 
 	// Snapshot storage before the request: the commit guard discards the
 	// result if a non-empty snapshot changed under us (a concurrent
@@ -408,16 +413,27 @@ func (c *Client) SignOut(ctx context.Context, accessToken string, scope SignOutS
 	if err != nil && !isSessionMissing(err) {
 		return err
 	}
+	// Clear only the session that was signed out: one committed meanwhile
+	// (e.g. a concurrent sign-in) survives. With no stored session the
+	// clear is unconditional (it still removes PKCE verifiers and emits
+	// SIGNED_OUT, like auth-js).
+	clear := func() error {
+		if s == nil {
+			return c.clearSession(ctx)
+		}
+		_, err := c.clearSessionIf(ctx, basisOf(s).matches)
+		return err
+	}
 	if s != nil {
 		if err := logout(s.AccessToken); err != nil && !ignorableSignOutError(err) {
 			if scope != SignOutOthers {
-				_ = c.clearSession(ctx)
+				_ = clear()
 			}
 			return err
 		}
 	}
 	if scope != SignOutOthers {
-		return c.clearSession(ctx)
+		return clear()
 	}
 	return nil
 }
@@ -436,17 +452,17 @@ func ignorableSignOutError(err error) bool {
 	return false
 }
 
-// GetUser fetches the user for jwt from the server (GET /user), which
-// validates the token. Use it (or GetClaims) to authenticate requests on a
-// server; never trust GetSession's user for that.
+// GetUser fetches the user for accessToken from the server (GET /user),
+// which validates the token. Use it (or GetClaims) to authenticate requests
+// on a server; never trust GetSession's user for that.
 //
-// With jwt == "" the stored session's access token is used (see
+// With accessToken == "" the stored session's access token is used (see
 // "Token-taking methods" in the package documentation); if the server
 // reports that the session no longer exists, the stored session is removed
 // and SIGNED_OUT emitted.
-func (c *Client) GetUser(ctx context.Context, jwt string) (*User, error) {
-	if jwt != "" {
-		return c.fetchUser(ctx, jwt)
+func (c *Client) GetUser(ctx context.Context, accessToken string) (*User, error) {
+	if accessToken != "" {
+		return c.fetchUser(ctx, accessToken)
 	}
 	s, err := c.GetSession(ctx)
 	if err != nil {

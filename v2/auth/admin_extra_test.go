@@ -259,7 +259,7 @@ func TestAdminDeleteProvider(t *testing.T) {
 func TestAdminListPasskeys(t *testing.T) {
 	resp := `[{"id":"` + adminTestPasskeyID + `","friendly_name":"MacBook","created_at":"2026-01-01T00:00:00Z","last_used_at":"2026-02-01T00:00:00Z"}]`
 	c, got := adminTestServer(t, http.StatusOK, resp, nil)
-	ps, err := c.Admin().Passkeys().ListPasskeys(context.Background(), adminTestUserID)
+	ps, err := c.Admin().Passkey().List(context.Background(), adminTestUserID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestAdminListPasskeys(t *testing.T) {
 	}
 	adminCheck(t, adminOne(t, got), http.MethodGet, "/auth/v1/admin/users/"+adminTestUserID+"/passkeys", "", adminTestKey)
 
-	if _, err := c.Admin().Passkeys().ListPasskeys(context.Background(), "not-a-uuid"); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := c.Admin().Passkey().List(context.Background(), "not-a-uuid"); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("err = %v", err)
 	}
 	if len(got()) != 1 {
@@ -276,19 +276,19 @@ func TestAdminListPasskeys(t *testing.T) {
 	}
 	body, h := adminAPIErrorBody(ErrorCodeUserNotFound, "nf")
 	c, _ = adminTestServer(t, http.StatusNotFound, body, h)
-	_, err = c.Admin().Passkeys().ListPasskeys(context.Background(), adminTestUserID)
+	_, err = c.Admin().Passkey().List(context.Background(), adminTestUserID)
 	adminWantAPIError(t, err, 404, ErrorCodeUserNotFound)
 }
 
 // upstream: auth-js src/GoTrueAdminApi.ts _adminDeletePasskey (test/passkey.methods.test.ts admin.passkey)
 func TestAdminDeletePasskey(t *testing.T) {
 	c, got := adminTestServer(t, http.StatusNoContent, "", nil)
-	if err := c.Admin().Passkeys().DeletePasskey(context.Background(), adminTestUserID, adminTestPasskeyID); err != nil {
+	if err := c.Admin().Passkey().Delete(context.Background(), adminTestUserID, adminTestPasskeyID); err != nil {
 		t.Fatal(err)
 	}
 	adminCheck(t, adminOne(t, got), http.MethodDelete, "/auth/v1/admin/users/"+adminTestUserID+"/passkeys/"+adminTestPasskeyID, "", adminTestKey)
 
-	if err := c.Admin().Passkeys().DeletePasskey(context.Background(), adminTestUserID, "not-a-uuid"); !errors.Is(err, ErrInvalidArgument) {
+	if err := c.Admin().Passkey().Delete(context.Background(), adminTestUserID, "not-a-uuid"); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("err = %v", err)
 	}
 	if len(got()) != 1 {
@@ -296,5 +296,5 @@ func TestAdminDeletePasskey(t *testing.T) {
 	}
 	body, h := adminAPIErrorBody("passkey_not_found", "Passkey not found")
 	c, _ = adminTestServer(t, http.StatusNotFound, body, h)
-	adminWantAPIError(t, c.Admin().Passkeys().DeletePasskey(context.Background(), adminTestUserID, adminTestPasskeyID), 404, "passkey_not_found")
+	adminWantAPIError(t, c.Admin().Passkey().Delete(context.Background(), adminTestUserID, adminTestPasskeyID), 404, "passkey_not_found")
 }

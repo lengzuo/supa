@@ -17,7 +17,7 @@ import (
 //
 // Calls are made on behalf of a signed-in user. By default the access
 // token of the Client's stored session (GetSession) is used; server
-// applications should call WithToken with the caller's access token
+// applications should call WithAccessToken with the caller's access token
 // instead. An *OAuthServerAPI is immutable and safe for concurrent use.
 type OAuthServerAPI struct {
 	c     *Client
@@ -27,10 +27,10 @@ type OAuthServerAPI struct {
 // OAuth returns the OAuth 2.1 server consent API.
 func (c *Client) OAuth() *OAuthServerAPI { return &OAuthServerAPI{c: c} }
 
-// WithToken returns a copy of o that authorizes every call with
+// WithAccessToken returns a copy of o that authorizes every call with
 // accessToken (a user JWT) instead of the stored session.
-func (o *OAuthServerAPI) WithToken(accessToken string) *OAuthServerAPI {
-	return &OAuthServerAPI{c: o.c, token: accessToken}
+func (o *OAuthServerAPI) WithAccessToken(accessToken string) *OAuthServerAPI {
+	return &OAuthServerAPI{c: o.c, token: strings.TrimSpace(accessToken)}
 }
 
 // oauthToken resolves the user access token for a call.

@@ -401,13 +401,20 @@ type ExchangeCodeOptions struct {
 	// sb_flow_id redirect parameter or OAuthResponse.FlowID). When empty,
 	// the verifier of the most recently started flow is used.
 	FlowID string
+	// NoStore makes the exchange stateless: the session is returned but not
+	// stored in the Client and no event is emitted, and the code verifier
+	// is removed from storage as soon as it has been read. Use it on a
+	// server whose Client is shared between users, so one user's callback
+	// never becomes the Client's session for later requests (the same
+	// convention as passing an explicit access token).
+	NoStore bool
 }
 
 // ExchangeCodeForSession exchanges a PKCE auth code from a redirect for a
 // session (POST /token?grant_type=pkce) using the code verifier stored when
 // the flow started, stores the session and emits SIGNED_IN
-// (PASSWORD_RECOVERY for a password-reset flow). The verifier is consumed
-// whether or not the exchange succeeds.
+// (PASSWORD_RECOVERY for a password-reset flow), unless opts.NoStore is set.
+// The verifier is consumed whether or not the exchange succeeds.
 //
 // Several PKCE flows may be pending at once (up to five): each flow's
 // verifier lives in its own slot, and with a flow id only that slot is
@@ -428,14 +435,21 @@ func (c *Client) ExchangeCodeForSession(ctx context.Context, authCode string, op
 	if err != nil {
 		return nil, fmt.Errorf("auth: load code verifier: %w", err)
 	}
+	noStore := opts != nil && opts.NoStore
 	verifier, redirectType, _ := strings.Cut(stored, "/")
 	if verifier == "" && c.cfg.FlowType == FlowPKCE {
 		c.removePKCEVerifier(ctx, flowID)
 		return nil, ErrPKCEVerifierMissing
 	}
+	if noStore {
+		// Do not keep the verifier in shared storage for the round trip.
+		c.removePKCEVerifier(ctx, flowID)
+	}
 	body := map[string]string{"auth_code": authCode, "code_verifier": verifier}
 	resp, err := c.postSession(ctx, "/token", url.Values{"grant_type": {"pkce"}}, "", body)
-	c.removePKCEVerifier(ctx, flowID)
+	if !noStore {
+		c.removePKCEVerifier(ctx, flowID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +457,9 @@ func (c *Client) ExchangeCodeForSession(ctx context.Context, authCode string, op
 		return nil, ErrInvalidTokenResponse
 	}
 	resp.RedirectType = redirectType
+	if noStore {
+		return resp, nil
+	}
 	event := EventSignedIn
 	if redirectType == OTPTypeRecovery {
 		event = EventPasswordRecovery

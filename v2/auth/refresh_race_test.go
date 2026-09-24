@@ -21,6 +21,10 @@ type strictRefreshServer struct {
 	gen       int
 	expiresIn int64
 	reused    atomic.Bool
+	// verifyGate and tokenGate, when set, hold MFA verify and refresh
+	// requests until released.
+	verifyGate *gate
+	tokenGate  *gate
 }
 
 func newStrictRefreshServer(t *testing.T, first string, expiresIn int64) *strictRefreshServer {
@@ -28,6 +32,9 @@ func newStrictRefreshServer(t *testing.T, first string, expiresIn int64) *strict
 	s.coreServer = newCoreServer(t, func(w http.ResponseWriter, r *coreReq) {
 		switch r.Path {
 		case "/auth/v1/token":
+			if g := s.tokenGate; g != nil {
+				g.wait()
+			}
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if r.Body["refresh_token"] != s.current {
@@ -35,6 +42,17 @@ func newStrictRefreshServer(t *testing.T, first string, expiresIn int64) *strict
 				coreJSON(w, 400, map[string]any{"code": ErrorCodeRefreshTokenReused, "msg": "Invalid Refresh Token: Already Used"})
 				return
 			}
+			s.gen++
+			s.current = fmt.Sprintf("rt.1.%d", s.gen)
+			coreJSON(w, 200, coreSession(fmt.Sprintf("at.%d", s.gen), s.current, s.expiresIn))
+		case "/auth/v1/factors/f-1/verify", "/auth/v1/factors/recovery-codes/verify":
+			// Like GoTrue updateMFASessionAndClaims: a successful verify swaps
+			// the session's refresh token.
+			if g := s.verifyGate; g != nil {
+				g.wait()
+			}
+			s.mu.Lock()
+			defer s.mu.Unlock()
 			s.gen++
 			s.current = fmt.Sprintf("rt.1.%d", s.gen)
 			coreJSON(w, 200, coreSession(fmt.Sprintf("at.%d", s.gen), s.current, s.expiresIn))
@@ -367,5 +385,127 @@ func TestMemoryStorageZeroValue(t *testing.T) {
 	}
 	if err := (&MemoryStorage{}).RemoveItem(ctx, "missing"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// upstream: auth-js src/GoTrueClient.ts _verify + _callRefreshToken share _acquireLock
+// (an MFA verify rotating the refresh token must not race a refresh)
+func TestMFAVerifyRacingRefresh(t *testing.T) {
+	ctx := context.Background()
+	t.Run("refresh started during verify", func(t *testing.T) {
+		srv := newStrictRefreshServer(t, "rt.1.1", 3600)
+		srv.verifyGate = newGate()
+		c := srv.client(t)
+		coreStoreSession(t, c, "at.1", "rt.1.1", time.Now().Add(time.Hour))
+		verified := make(chan error, 1)
+		go func() {
+			_, err := c.MFA().Verify(ctx, MFAVerifyParams{FactorID: "f-1", ChallengeID: "ch", Code: "123456"})
+			verified <- err
+		}()
+		srv.verifyGate.await(t) // verify sent with at.1 and held
+		refreshed := make(chan error, 1)
+		go func() {
+			_, err := c.RefreshSession(ctx, "") // reads rt.1.1 from storage
+			refreshed <- err
+		}()
+		time.Sleep(20 * time.Millisecond)
+		close(srv.verifyGate.release) // server rotates rt.1.1 -> rt.1.2
+		if err := <-verified; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-refreshed; err != nil {
+			t.Fatal(err)
+		}
+		// The next refresh must use the live token.
+		if _, err := c.RefreshSession(ctx, ""); err != nil {
+			t.Fatal(err)
+		}
+		if srv.reused.Load() {
+			t.Fatal("a rotated refresh token was sent")
+		}
+		if st := coreStored(t, c); st.RefreshToken != srv.currentToken() {
+			t.Fatalf("stored %q, server %q", st.RefreshToken, srv.currentToken())
+		}
+	})
+	t.Run("verify started during refresh", func(t *testing.T) {
+		srv := newStrictRefreshServer(t, "rt.1.1", 3600)
+		srv.tokenGate = newGate()
+		c := srv.client(t)
+		coreStoreSession(t, c, "at.1", "rt.1.1", time.Now().Add(time.Hour))
+		refreshed := make(chan error, 1)
+		go func() {
+			_, err := c.RefreshSession(ctx, "")
+			refreshed <- err
+		}()
+		srv.tokenGate.await(t) // refresh sent with rt.1.1 and held
+		verified := make(chan error, 1)
+		go func() {
+			_, err := c.MFA().RecoveryCodes().Verify(ctx, MFARecoveryCodesVerifyParams{Code: "abcd-efgh"})
+			verified <- err
+		}()
+		time.Sleep(20 * time.Millisecond)
+		close(srv.tokenGate.release)
+		if err := <-refreshed; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-verified; err != nil {
+			t.Fatal(err)
+		}
+		if n := srv.count("/auth/v1/factors/recovery-codes/verify"); n != 1 {
+			t.Fatalf("%d verify requests", n)
+		}
+		if got := srv.last(t).Header.Get("Authorization"); got != "Bearer at.2" {
+			t.Fatalf("verify used %q, want the refreshed session's token", got)
+		}
+		if _, err := c.RefreshSession(ctx, ""); err != nil {
+			t.Fatal(err)
+		}
+		if srv.reused.Load() {
+			t.Fatal("a rotated refresh token was sent")
+		}
+		if st := coreStored(t, c); st.RefreshToken != srv.currentToken() {
+			t.Fatalf("stored %q, server %q", st.RefreshToken, srv.currentToken())
+		}
+	})
+}
+
+// upstream: auth-js src/GoTrueClient.ts (refresh + MFA verify chaos, strict reuse detection)
+func TestRefreshVerifyChaosStrictServer(t *testing.T) {
+	ctx := context.Background()
+	srv := newStrictRefreshServer(t, "rt.1.1", 60) // inside the margin: GetSession refreshes
+	c := srv.client(t)
+	coreStoreSession(t, c, "at.1", "rt.1.1", time.Now().Add(10*time.Second))
+	var wg sync.WaitGroup
+	for g := 0; g < 12; g++ {
+		wg.Add(1)
+		go func(seed uint64) {
+			defer wg.Done()
+			rng := rand.New(rand.NewPCG(seed, seed+7))
+			for i := 0; i < 20; i++ {
+				switch rng.IntN(5) {
+				case 0:
+					_, _ = c.GetSession(ctx)
+				case 1:
+					_, _ = c.RefreshSession(ctx, "")
+				case 2:
+					c.autoRefreshTick(ctx)
+				case 3:
+					_, _ = c.MFA().Verify(ctx, MFAVerifyParams{FactorID: "f-1", ChallengeID: "ch", Code: "1"})
+				default:
+					_, _ = c.MFA().RecoveryCodes().Verify(ctx, MFARecoveryCodesVerifyParams{Code: "abcd"})
+				}
+			}
+		}(uint64(g))
+	}
+	wg.Wait()
+	if srv.reused.Load() {
+		t.Fatal("a rotated refresh token was reused")
+	}
+	st := coreStored(t, c)
+	if st == nil || st.RefreshToken != srv.currentToken() {
+		t.Fatalf("stored %+v, server current %q", st, srv.currentToken())
+	}
+	if _, err := c.RefreshSession(ctx, ""); err != nil || srv.reused.Load() {
+		t.Fatalf("session unusable after chaos: %v", err)
 	}
 }

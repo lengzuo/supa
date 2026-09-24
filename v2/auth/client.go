@@ -26,7 +26,15 @@
 //     written back to it and listeners are notified, like supabase-js.
 //     ErrSessionMissing is returned when there is no stored session.
 //
-// GetClaims (jwt) and RefreshSession (refreshToken) follow the same rule.
+// GetClaims (jwt) and RefreshSession (refreshToken) follow the same rule,
+// and so do ExchangeCodeForSession and GetSessionFromURL through their
+// NoStore option.
+//
+// The MFA and OAuth server APIs, whose methods take parameter structs, use
+// a builder instead of an argument: Client.MFA().WithAccessToken(jwt) and
+// Client.OAuth().WithAccessToken(jwt) act for that JWT (stateless); without
+// it they use the stored session. Admin calls (Client.Admin) always use the
+// API key.
 package auth
 
 import (
@@ -107,6 +115,15 @@ type Client struct {
 	cfg        Config
 	storage    SessionStorage
 	storageKey string
+
+	// rotateMu is held across every stored-session round trip after which
+	// the server rotates the session's refresh token (token refresh, MFA
+	// verification), from reading the stored token to committing the
+	// result, so two such round trips never use the same refresh token.
+	// Lock order: rotateMu -> sessionMu -> evMu. Events are never delivered
+	// while rotateMu is held, and nothing that may itself need rotateMu
+	// (e.g. GetSession, which can refresh) is called while holding it.
+	rotateMu sync.Mutex
 
 	// sessionMu serializes session read-modify-write cycles (refresh,
 	// sign-in, sign-out) so concurrent callers do not race.

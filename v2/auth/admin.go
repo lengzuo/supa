@@ -39,8 +39,8 @@ func (a *AdminAPI) CustomProviders() *AdminCustomProviderAPI {
 	return &AdminCustomProviderAPI{c: a.c}
 }
 
-// Passkeys returns the admin passkey API (auth-js admin.passkey).
-func (a *AdminAPI) Passkeys() *AdminPasskeyAPI { return &AdminPasskeyAPI{c: a.c} }
+// Passkey returns the admin passkey API (auth-js admin.passkey).
+func (a *AdminAPI) Passkey() *AdminPasskeyAPI { return &AdminPasskeyAPI{c: a.c} }
 
 // adminUUIDPattern matches the UUIDs GoTrue uses for users, factors and
 // passkeys (auth-js validateUUID).

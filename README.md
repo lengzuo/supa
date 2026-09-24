@@ -170,10 +170,15 @@ if err != nil {
 fmt.Println("redirect the user to", oauth.URL)
 
 // 2. In the callback handler, exchange the ?code=... for a session.
+// NoStore returns the session without making it the client's own session,
+// which is what a server shared between users needs; hand the tokens to
+// the user (e.g. in a cookie) instead.
 http.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
-	res, err := client.Auth.ExchangeCodeForSession(r.Context(), r.URL.Query().Get("code"), nil)
+	res, err := client.Auth.ExchangeCodeForSession(r.Context(), r.URL.Query().Get("code"),
+		&auth.ExchangeCodeOptions{NoStore: true})
 	// Or let the SDK read code / error parameters from the URL:
-	//   res, err := client.Auth.GetSessionFromURL(r.Context(), r.URL.String())
+	//   res, err := client.Auth.GetSessionFromURL(r.Context(), r.URL.String(),
+	//       &auth.GetSessionFromURLOptions{NoStore: true})
 	if err != nil {
 		http.Error(w, "sign-in failed", http.StatusUnauthorized)
 		return
@@ -185,7 +190,12 @@ http.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
 The verifier lives in the client that started the flow. On a server with many
 users, start and finish each flow with a client whose `SessionStorage` is
 scoped to that user (for example, one backed by a cookie or your session
-store); see [Custom session storage](#custom-session-storage).
+store); see [Custom session storage](#custom-session-storage). Use
+`ExchangeCodeOptions{NoStore: true}` (or `GetSessionFromURLOptions{NoStore:
+true}`) so the resulting session is returned to you rather than becoming the
+client's own session: without it, one user's callback would make later calls
+on a shared client run as that user. The verifier is removed from storage as
+soon as it has been read.
 
 ### Verify a user's JWT on a server
 
@@ -370,7 +380,7 @@ fmt.Println("magic link:", link.Properties.ActionLink)
 ```
 
 Also available: `GetUserByID`, `UpdateUserByID`, `DeleteUser`,
-`InviteUserByEmail`, `SignOut`, and the `MFA()`, `OAuth()`, `Passkeys()` and
+`InviteUserByEmail`, `SignOut`, and the `MFA()`, `OAuth()`, `Passkey()` and
 `CustomProviders()` admin APIs.
 
 ## Database

@@ -804,16 +804,21 @@ func TestMFAContextCanceled(t *testing.T) {
 
 // upstream: auth-js src/GoTrueClient.ts _verify (concurrent use)
 func TestMFAConcurrentVerify(t *testing.T) {
-	// Hold every verify request until all 8 have arrived, so all of them
-	// were authenticated with the same (original) stored session.
+	// Stored-session verifications rotate the refresh token server-side, so
+	// they are serialized (rotateMu): each one re-reads the session the
+	// previous one committed and uses its access token.
 	const n = 8
-	var arrived atomic.Int32
-	allIn := make(chan struct{})
-	c, _ := mfaNewTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if arrived.Add(1) == n {
-			close(allIn)
+	var inFlight, maxInFlight atomic.Int32
+	c, fs := mfaNewTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		cur := inFlight.Add(1)
+		for {
+			m := maxInFlight.Load()
+			if cur <= m || maxInFlight.CompareAndSwap(m, cur) {
+				break
+			}
 		}
-		<-allIn
+		time.Sleep(2 * time.Millisecond)
+		inFlight.Add(-1)
 		mfaWriteJSON(w, http.StatusOK, mfaVerifyResponse())
 	})
 	mfaSignIn(t, c, "stored-access-token", nil)
@@ -829,13 +834,19 @@ func TestMFAConcurrentVerify(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	// All verifications started from the same stored session; the first
-	// write-back replaces it, so the others (whose basis is no longer the
-	// stored session) must not overwrite it again.
-	if events, _ := ev.snapshot(); len(events) != 1 {
-		t.Errorf("got %d events, want 1", len(events))
+	if m := maxInFlight.Load(); m != 1 {
+		t.Errorf("%d verifications in flight at once, want 1", m)
 	}
-	if stored, _ := c.loadSession(context.Background()); stored == nil || stored.AccessToken == "stored-access-token" {
-		t.Errorf("stored session not upgraded: %+v", stored)
+	if events, _ := ev.snapshot(); len(events) != n {
+		t.Errorf("got %d events, want %d", len(events), n)
+	}
+	reqs := fs.all()
+	if got := reqs[0].Header.Get("Authorization"); got != "Bearer stored-access-token" {
+		t.Errorf("first verify used %q", got)
+	}
+	for _, r := range reqs[1:] {
+		if got := r.Header.Get("Authorization"); got != "Bearer aal2-access-token" {
+			t.Errorf("later verify used %q, want the committed session's token", got)
+		}
 	}
 }

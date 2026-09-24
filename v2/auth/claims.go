@@ -58,7 +58,15 @@ type ClaimsResult struct {
 var jwksCache = struct {
 	sync.Mutex
 	m map[string]jwksEntry
-}{m: map[string]jwksEntry{}}
+	// missing remembers kids (per endpoint) absent from a fresh JWKS until
+	// the given time, so unknown kids do not trigger a fetch per call.
+	missing map[string]time.Time
+}{m: map[string]jwksEntry{}, missing: map[string]time.Time{}}
+
+// jwksMissingTTL is how long an unknown kid is remembered as absent. Such
+// tokens fall back to server-side validation (GetUser) meanwhile, so a
+// newly rotated key is still accepted, just not verified locally.
+const jwksMissingTTL = 30 * time.Second
 
 type jwksEntry struct {
 	keys      []JWK
@@ -138,13 +146,18 @@ func (c *Client) fetchJWK(ctx context.Context, kid string, supplied []JWK) (*JWK
 	}
 	now := c.now()
 
+	missingKey := endpoint + "#" + kid
 	jwksCache.Lock()
 	entry, ok := jwksCache.m[endpoint]
+	missUntil, missing := jwksCache.missing[missingKey]
 	jwksCache.Unlock()
 	if ok && now.Sub(entry.fetchedAt) < JWKSCacheTTL {
 		if k := findJWK(entry.keys, kid); k != nil {
 			return k, nil
 		}
+	}
+	if missing && now.Before(missUntil) {
+		return nil, nil
 	}
 
 	var out struct {
@@ -153,13 +166,23 @@ func (c *Client) fetchJWK(ctx context.Context, kid string, supplied []JWK) (*JWK
 	if err := c.call(ctx, http.MethodGet, "/.well-known/jwks.json", nil, "", nil, &out); err != nil {
 		return nil, err
 	}
-	if len(out.Keys) == 0 {
-		return nil, nil
-	}
+	k := findJWK(out.Keys, kid)
 	jwksCache.Lock()
-	jwksCache.m[endpoint] = jwksEntry{keys: out.Keys, fetchedAt: now}
+	if len(out.Keys) > 0 {
+		jwksCache.m[endpoint] = jwksEntry{keys: out.Keys, fetchedAt: now}
+	}
+	if k == nil {
+		for key, until := range jwksCache.missing {
+			if !now.Before(until) {
+				delete(jwksCache.missing, key)
+			}
+		}
+		jwksCache.missing[missingKey] = now.Add(jwksMissingTTL)
+	} else {
+		delete(jwksCache.missing, missingKey)
+	}
 	jwksCache.Unlock()
-	return findJWK(out.Keys, kid), nil
+	return k, nil
 }
 
 func findJWK(keys []JWK, kid string) *JWK {
@@ -174,6 +197,22 @@ func findJWK(keys []JWK, kid string) *JWK {
 
 // verifyJWTSignature checks d's signature with key for RS256 and ES256.
 func verifyJWTSignature(d *decodedJWT, key *JWK) error {
+	// A key restricted to another use (e.g. encryption) must not verify.
+	if key.Use != "" && key.Use != "sig" {
+		return invalidJWT("signing key is not a signature key")
+	}
+	if len(key.KeyOps) > 0 {
+		verify := false
+		for _, op := range key.KeyOps {
+			if op == "verify" {
+				verify = true
+				break
+			}
+		}
+		if !verify {
+			return invalidJWT("signing key does not allow verify")
+		}
+	}
 	digest := sha256.Sum256([]byte(d.SigningInput))
 	switch d.Header.Alg {
 	case "RS256":

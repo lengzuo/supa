@@ -8,7 +8,7 @@ import (
 	"github.com/lengzuo/supa/v2/internal/transport"
 )
 
-// AdminPasskeyAPI manages users' passkeys. Obtain it with AdminAPI.Passkeys.
+// AdminPasskeyAPI manages users' passkeys. Obtain it with AdminAPI.Passkey.
 type AdminPasskeyAPI struct {
 	c *Client
 }
@@ -22,8 +22,8 @@ type AdminPasskey struct {
 	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
 }
 
-// ListPasskeys returns the passkeys of the user, whose ID must be a UUID.
-func (p *AdminPasskeyAPI) ListPasskeys(ctx context.Context, userID string) ([]AdminPasskey, error) {
+// List returns the passkeys of the user, whose ID must be a UUID.
+func (p *AdminPasskeyAPI) List(ctx context.Context, userID string) ([]AdminPasskey, error) {
 	if err := adminValidateUUID("user ID", userID); err != nil {
 		return nil, err
 	}
@@ -37,9 +37,9 @@ func (p *AdminPasskeyAPI) ListPasskeys(ctx context.Context, userID string) ([]Ad
 	return out, nil
 }
 
-// DeletePasskey deletes the passkey passkeyID of the user userID (both
+// Delete deletes the passkey passkeyID of the user userID (both
 // UUIDs).
-func (p *AdminPasskeyAPI) DeletePasskey(ctx context.Context, userID, passkeyID string) error {
+func (p *AdminPasskeyAPI) Delete(ctx context.Context, userID, passkeyID string) error {
 	if err := adminValidateUUID("user ID", userID); err != nil {
 		return err
 	}

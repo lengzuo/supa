@@ -106,7 +106,7 @@ features:
     reason: ""
   auth.oauth_server.approve_authorization:
     status: implemented
-    symbols: [auth.Client.OAuth, auth.OAuthServerAPI.WithToken, auth.OAuthServerAPI.ApproveAuthorization]
+    symbols: [auth.Client.OAuth, auth.OAuthServerAPI.WithAccessToken, auth.OAuthServerAPI.ApproveAuthorization]
     tests: [TestOAuthApproveAuthorization, TestOAuthSessionMissing]
     reason: ""
   auth.oauth_server.deny_authorization:
@@ -131,11 +131,11 @@ features:
     reason: ""
   auth.passkey_admin.delete_passkey:
     status: implemented
-    symbols: [auth.AdminAPI.Passkeys, auth.AdminPasskeyAPI.DeletePasskey]
+    symbols: [auth.AdminAPI.Passkey, auth.AdminPasskeyAPI.Delete]
     tests: [TestAdminDeletePasskey]
     reason: ""
   auth.passkey_admin.list_passkeys:
     status: implemented
-    symbols: [auth.AdminPasskeyAPI.ListPasskeys]
+    symbols: [auth.AdminPasskeyAPI.List]
     tests: [TestAdminListPasskeys]
     reason: ""

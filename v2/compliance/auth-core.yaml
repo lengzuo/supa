@@ -49,7 +49,7 @@ features:
   auth.sign_in.exchange_code_for_session:
     status: implemented
     symbols: [auth.Client.ExchangeCodeForSession, auth.ExchangeCodeOptions]
-    tests: [TestExchangeCodeForSession]
+    tests: [TestExchangeCodeForSession, TestExchangeCodeForSessionNoStore]
     reason: ""
   auth.sign_in.reauthenticate:
     status: implemented
@@ -80,7 +80,7 @@ features:
   auth.session.get_claims:
     status: implemented
     symbols: [auth.Client.GetClaims, auth.GetClaimsOptions, auth.ClaimsResult, auth.JWK, auth.JWKSCacheTTL]
-    tests: [TestGetClaims, TestGetClaimsAlgorithmConfusion, TestAMREntryUnmarshal]
+    tests: [TestGetClaims, TestGetClaimsAlgorithmConfusion, TestGetClaimsKeyUsageAndUnknownKidCache, TestAMREntryUnmarshal]
     reason: ""
   auth.session.get_session:
     status: implemented
@@ -105,7 +105,7 @@ features:
   auth.session.sign_out:
     status: implemented
     symbols: [auth.Client.SignOut, auth.SignOutScope]
-    tests: [TestSignOut]
+    tests: [TestSignOut, TestSignOutKeepsConcurrentSignIn]
     reason: ""
   auth.session.sign_out_reason:
     status: not_applicable
@@ -190,6 +190,6 @@ features:
     reason: ""
   client.authentication_integration.session_url_detection:
     status: implemented
-    symbols: [auth.Client.GetSessionFromURL, auth.ErrImplicitGrantRedirect, auth.ErrPKCEGrantCodeExchange]
-    tests: [TestGetSessionFromURL, TestGetSessionFromURLErrorParams, TestGetSessionFromURLInvalidFlowID, TestConcurrentPKCEFlows]
+    symbols: [auth.Client.GetSessionFromURL, auth.GetSessionFromURLOptions, auth.ErrImplicitGrantRedirect, auth.ErrPKCEGrantCodeExchange]
+    tests: [TestGetSessionFromURL, TestGetSessionFromURLNoStore, TestGetSessionFromURLErrorParams, TestGetSessionFromURLInvalidFlowID, TestConcurrentPKCEFlows]
     reason: ""

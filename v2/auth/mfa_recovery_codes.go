@@ -110,15 +110,7 @@ func (r *MFARecoveryCodesAPI) Verify(ctx context.Context, params MFARecoveryCode
 	body := struct {
 		Code string `json:"code"`
 	}{params.Code}
-	var s Session
-	basis, err := r.m.mfaDoBasis(ctx, http.MethodPost, "/factors/recovery-codes/verify", body, &s)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.m.mfaStoreVerified(ctx, basis, &s); err != nil {
-		return nil, err
-	}
-	return &s, nil
+	return r.m.mfaVerify(ctx, "/factors/recovery-codes/verify", body)
 }
 
 // Regenerate replaces the user's recovery codes with a new set

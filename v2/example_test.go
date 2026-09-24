@@ -179,10 +179,15 @@ func ExampleClient_oauthPKCE() {
 	fmt.Println("redirect the user to", oauth.URL)
 
 	// 2. In the callback handler, exchange the ?code=... for a session.
+	// NoStore returns the session without making it the client's own session,
+	// which is what a server shared between users needs; hand the tokens to
+	// the user (e.g. in a cookie) instead.
 	http.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
-		res, err := client.Auth.ExchangeCodeForSession(r.Context(), r.URL.Query().Get("code"), nil)
+		res, err := client.Auth.ExchangeCodeForSession(r.Context(), r.URL.Query().Get("code"),
+			&auth.ExchangeCodeOptions{NoStore: true})
 		// Or let the SDK read code / error parameters from the URL:
-		//   res, err := client.Auth.GetSessionFromURL(r.Context(), r.URL.String())
+		//   res, err := client.Auth.GetSessionFromURL(r.Context(), r.URL.String(),
+		//       &auth.GetSessionFromURLOptions{NoStore: true})
 		if err != nil {
 			http.Error(w, "sign-in failed", http.StatusUnauthorized)
 			return

@@ -225,6 +225,17 @@ func (c *Client) updateStoredUser(ctx context.Context, basis sessionBasis, user 
 // resurrected or overwritten with stale tokens). It reports whether next
 // was stored.
 func (c *Client) replaceSessionIfCurrent(ctx context.Context, basis sessionBasis, next *Session, event AuthChangeEvent) (bool, error) {
+	ok, err := c.replaceSessionIfCurrentQueued(ctx, basis, next, event)
+	if ok {
+		c.deliverEvents()
+	}
+	return ok, err
+}
+
+// replaceSessionIfCurrentQueued is replaceSessionIfCurrent without
+// delivering the queued event; the caller must call deliverEvents (after
+// releasing rotateMu, if held).
+func (c *Client) replaceSessionIfCurrentQueued(ctx context.Context, basis sessionBasis, next *Session, event AuthChangeEvent) (bool, error) {
 	c.sessionMu.Lock()
 	stored, err := c.loadSession(ctx)
 	if err != nil || !basis.matches(stored) {
@@ -242,6 +253,5 @@ func (c *Client) replaceSessionIfCurrent(ctx context.Context, basis sessionBasis
 	c.refreshMu.Lock()
 	c.lastRefreshFailure = nil
 	c.refreshMu.Unlock()
-	c.deliverEvents()
 	return true, nil
 }

@@ -7,6 +7,14 @@ import (
 	"strconv"
 )
 
+// GetSessionFromURLOptions configure GetSessionFromURL.
+type GetSessionFromURLOptions struct {
+	// NoStore returns the session without storing it in the Client or
+	// emitting an event (see ExchangeCodeOptions.NoStore). Use it on a
+	// server whose Client is shared between users.
+	NoStore bool
+}
+
 // GetSessionFromURL completes a sign-in from the URL the Auth server
 // redirected the user to (the server-side counterpart of auth-js
 // detectSessionInUrl). Parameters are read from both the fragment and the
@@ -23,10 +31,11 @@ import (
 //     are validated with GetUser and adopted as the session.
 //
 // The session is stored and SIGNED_IN (PASSWORD_RECOVERY for recovery
-// links) emitted. A callback type that does not match Config.FlowType is
+// links) emitted, unless opts.NoStore is set (opts may be nil). A callback type that does not match Config.FlowType is
 // rejected. Note that implicit-flow fragments never reach a server; a
 // server receives them only if the page forwards them.
-func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthResponse, error) {
+func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string, opts *GetSessionFromURLOptions) (*AuthResponse, error) {
+	noStore := opts != nil && opts.NoStore
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid callback URL", ErrInvalidArgument)
@@ -66,7 +75,7 @@ func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthRes
 		if c.cfg.FlowType == FlowPKCE {
 			return nil, newError(ErrPKCEGrantCodeExchange.Code, "not a valid PKCE flow url")
 		}
-		return c.sessionFromImplicitGrant(ctx, params)
+		return c.sessionFromImplicitGrant(ctx, params, noStore)
 	case params["code"] != "":
 		if c.cfg.FlowType != FlowPKCE {
 			return nil, newError(ErrImplicitGrantRedirect.Code, "not a valid implicit grant flow url")
@@ -76,13 +85,13 @@ func (c *Client) GetSessionFromURL(ctx context.Context, rawURL string) (*AuthRes
 			// borrowing another flow's verifier, like auth-js.
 			return nil, ErrPKCEVerifierMissing
 		}
-		return c.ExchangeCodeForSession(ctx, params["code"], &ExchangeCodeOptions{FlowID: params[PKCEFlowIDParam]})
+		return c.ExchangeCodeForSession(ctx, params["code"], &ExchangeCodeOptions{FlowID: params[PKCEFlowIDParam], NoStore: noStore})
 	default:
 		return nil, newError(ErrImplicitGrantRedirect.Code, "no session defined in URL")
 	}
 }
 
-func (c *Client) sessionFromImplicitGrant(ctx context.Context, params map[string]string) (*AuthResponse, error) {
+func (c *Client) sessionFromImplicitGrant(ctx context.Context, params map[string]string, noStore bool) (*AuthResponse, error) {
 	accessToken, refreshToken := params["access_token"], params["refresh_token"]
 	if accessToken == "" || params["expires_in"] == "" || refreshToken == "" || params["token_type"] == "" {
 		return nil, newError(ErrImplicitGrantRedirect.Code, "no session defined in URL")
@@ -115,6 +124,10 @@ func (c *Client) sessionFromImplicitGrant(ctx context.Context, params map[string
 		ProviderRefreshToken: params["provider_refresh_token"],
 		User:                 user,
 	}
+	resp := &AuthResponse{User: user, Session: s, RedirectType: params["type"]}
+	if noStore {
+		return resp, nil
+	}
 	event := EventSignedIn
 	if params["type"] == OTPTypeRecovery {
 		event = EventPasswordRecovery
@@ -122,5 +135,5 @@ func (c *Client) sessionFromImplicitGrant(ctx context.Context, params map[string
 	if err := c.commitSession(ctx, s, event); err != nil {
 		return nil, err
 	}
-	return &AuthResponse{User: user, Session: s, RedirectType: params["type"]}, nil
+	return resp, nil
 }
