@@ -1,0 +1,161 @@
+features:
+  storage.analytics.create_analytics_bucket:
+    status: implemented
+    symbols: [storage.Client.Analytics, storage.AnalyticsAPI.CreateBucket]
+    tests: [TestAnalyticsCreateBucket, TestAnalyticsBucketError]
+    reason: ""
+  storage.analytics.delete_analytics_bucket:
+    status: implemented
+    symbols: [storage.AnalyticsAPI.DeleteBucket]
+    tests: [TestAnalyticsDeleteBucket]
+    reason: ""
+  storage.analytics.list_analytics_buckets:
+    status: implemented
+    symbols: [storage.AnalyticsAPI.ListBuckets, storage.AnalyticsListBucketsOptions]
+    tests: [TestAnalyticsListBuckets, TestAnalyticsContextCanceled]
+    reason: ""
+  storage.analytics.access_catalog:
+    status: implemented
+    symbols: [storage.AnalyticsAPI.From, storage.IcebergCatalog, storage.IcebergCatalog.LoadConfig]
+    tests: [TestAnalyticsFrom, TestIcebergAccessCatalog, TestIcebergPrefixFallback, TestIcebergErrorMapping, TestIcebergContextCanceled]
+    reason: ""
+  storage.analytics.create_namespace:
+    status: implemented
+    symbols: [storage.IcebergCatalog.CreateNamespace, storage.IcebergCatalog.CreateNamespaceIfNotExists]
+    tests: [TestIcebergCreateNamespace, TestIcebergCreateNamespaceIfNotExists]
+    reason: ""
+  storage.analytics.list_namespaces:
+    status: implemented
+    symbols: [storage.IcebergCatalog.ListNamespaces, storage.IcebergListNamespacesOptions]
+    tests: [TestIcebergListNamespaces]
+    reason: ""
+  storage.analytics.delete_namespace:
+    status: implemented
+    symbols: [storage.IcebergCatalog.DropNamespace]
+    tests: [TestIcebergDropNamespace]
+    reason: ""
+  storage.analytics.load_namespace_metadata:
+    status: implemented
+    symbols: [storage.IcebergCatalog.LoadNamespaceMetadata]
+    tests: [TestIcebergLoadNamespaceMetadata]
+    reason: ""
+  storage.analytics.namespace_exists:
+    status: implemented
+    symbols: [storage.IcebergCatalog.NamespaceExists]
+    tests: [TestIcebergNamespaceExists]
+    reason: ""
+  storage.analytics.update_namespace_properties:
+    status: implemented
+    symbols: [storage.IcebergCatalog.UpdateNamespaceProperties, storage.IcebergUpdateNamespacePropertiesParams]
+    tests: [TestIcebergUpdateNamespaceProperties]
+    reason: ""
+  storage.analytics.create_table:
+    status: implemented
+    symbols: [storage.IcebergCatalog.CreateTable, storage.IcebergCatalog.CreateTableIfNotExists, storage.IcebergCreateTableRequest]
+    tests: [TestIcebergCreateTable, TestIcebergCreateTableIfNotExists, TestIcebergTypeJSON]
+    reason: ""
+  storage.analytics.list_tables:
+    status: implemented
+    symbols: [storage.IcebergCatalog.ListTables]
+    tests: [TestIcebergListTables]
+    reason: ""
+  storage.analytics.load_table:
+    status: implemented
+    symbols: [storage.IcebergCatalog.LoadTable, storage.IcebergLoadTableOptions]
+    tests: [TestIcebergLoadTable]
+    reason: ""
+  storage.analytics.update_table:
+    status: implemented
+    symbols: [storage.IcebergCatalog.UpdateTable, storage.IcebergCommitTableRequest, storage.IcebergTableUpdate, storage.IcebergTableRequirement]
+    tests: [TestIcebergUpdateTable, TestIcebergTypeJSON]
+    reason: ""
+  storage.analytics.rename_table:
+    status: implemented
+    symbols: [storage.IcebergCatalog.RenameTable]
+    tests: [TestIcebergRenameTable]
+    reason: ""
+  storage.analytics.delete_table:
+    status: implemented
+    symbols: [storage.IcebergCatalog.DropTable, storage.IcebergDropTableOptions]
+    tests: [TestIcebergDropTable]
+    reason: ""
+  storage.analytics.register_table:
+    status: implemented
+    symbols: [storage.IcebergCatalog.RegisterTable, storage.IcebergRegisterTableRequest]
+    tests: [TestIcebergRegisterTable]
+    reason: ""
+  storage.analytics.table_exists:
+    status: implemented
+    symbols: [storage.IcebergCatalog.TableExists]
+    tests: [TestIcebergTableExists]
+    reason: ""
+  storage.vector_buckets.create_vector_bucket:
+    status: implemented
+    symbols: [storage.Client.Vectors, storage.VectorsAPI.CreateBucket]
+    tests: [TestVectorsCreateBucket, TestVectorsContextCanceled]
+    reason: ""
+  storage.vector_buckets.delete_vector_bucket:
+    status: implemented
+    symbols: [storage.VectorsAPI.DeleteBucket]
+    tests: [TestVectorsDeleteBucket]
+    reason: ""
+  storage.vector_buckets.list_vector_buckets:
+    status: implemented
+    symbols: [storage.VectorsAPI.ListBuckets, storage.VectorListBucketsOptions, storage.VectorsAPI.GetBucket]
+    tests: [TestVectorsListBuckets, TestVectorsGetBucket, TestVectorsNonJSONSuccess, TestVectorsErrorMapping]
+    reason: ""
+  storage.vector_buckets.access_vector_index:
+    status: implemented
+    symbols: [storage.VectorsAPI.From, storage.VectorBucketScope.Index]
+    tests: [TestVectorsAccessIndex, TestVectorsConcurrentScopes]
+    reason: ""
+  storage.vector_buckets.create_index:
+    status: implemented
+    symbols: [storage.VectorBucketScope.CreateIndex, storage.VectorCreateIndexOptions]
+    tests: [TestVectorsCreateIndex]
+    reason: ""
+  storage.vector_buckets.get_index:
+    status: implemented
+    symbols: [storage.VectorBucketScope.GetIndex]
+    tests: [TestVectorsGetIndex]
+    reason: ""
+  storage.vector_buckets.list_indexes:
+    status: implemented
+    symbols: [storage.VectorBucketScope.ListIndexes, storage.VectorListIndexesOptions]
+    tests: [TestVectorsListIndexes]
+    reason: ""
+  storage.vector_buckets.delete_index:
+    status: implemented
+    symbols: [storage.VectorBucketScope.DeleteIndex]
+    tests: [TestVectorsDeleteIndex]
+    reason: ""
+  storage.vector_buckets.put_vectors:
+    status: implemented
+    symbols: [storage.VectorIndexScope.PutVectors, storage.VectorPutVectorsOptions]
+    tests: [TestVectorsPutVectors]
+    reason: ""
+  storage.vector_buckets.get_vectors:
+    status: implemented
+    symbols: [storage.VectorIndexScope.GetVectors, storage.VectorGetVectorsOptions]
+    tests: [TestVectorsGetVectors, TestVectorsConcurrentScopes]
+    reason: ""
+  storage.vector_buckets.list_vectors:
+    status: implemented
+    symbols: [storage.VectorIndexScope.ListVectors, storage.VectorListVectorsOptions]
+    tests: [TestVectorsListVectors]
+    reason: ""
+  storage.vector_buckets.parallel_scan:
+    status: implemented
+    symbols: [storage.VectorIndexScope.ListVectors, storage.VectorListVectorsOptions, storage.VectorIndexScope.ParallelScan]
+    tests: [TestVectorsListVectors, TestVectorsParallelScan]
+    reason: ""
+  storage.vector_buckets.query_vectors:
+    status: implemented
+    symbols: [storage.VectorIndexScope.QueryVectors, storage.VectorQueryVectorsOptions]
+    tests: [TestVectorsQueryVectors]
+    reason: ""
+  storage.vector_buckets.delete_vectors:
+    status: implemented
+    symbols: [storage.VectorIndexScope.DeleteVectors, storage.VectorDeleteVectorsOptions]
+    tests: [TestVectorsDeleteVectors]
+    reason: ""
