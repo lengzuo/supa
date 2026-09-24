@@ -176,6 +176,7 @@ func New(supabaseURL, supabaseKey string, opts *Options) (*Client, error) {
 	rc.URL, rc.APIKey, rc.AccessToken = endpoint("realtime/v1"), supabaseKey, c.realtimeToken
 	rc.HTTPClient = firstClient(rc.HTTPClient, o.HTTPClient)
 	rc.Headers = mergeHeaders(o.Headers, rc.Headers)
+	rc.RequestEditors = appendEditors(o.RequestEditors, rc.RequestEditors)
 	rc.Logger = firstLogger(rc.Logger, o.Logger)
 	if c.Realtime, err = realtime.New(rc); err != nil {
 		return nil, fmt.Errorf("supabase: realtime: %w", err)
